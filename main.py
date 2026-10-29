@@ -19,7 +19,7 @@ from db import init_db, DB_PATH
 
 
 # ============================================================
-# КОНФИГУРАЦИЯ (из переменных окружения Bothost)
+# КОНФИГУРАЦИЯ
 # ============================================================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "ВАШ_ТОКЕН_ДЛЯ_ЛОКАЛЬНОГО_ТЕСТА")
 ACCESS_PASSWORD = os.environ.get("ACCESS_PASSWORD", "herewegoagain")
@@ -99,21 +99,18 @@ def authorize_user(user_id: int, name: str):
 
 
 # ============================================================
-# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: КАЛЕНДАРЬ
+# КАЛЕНДАРЬ (14 ДНЕЙ)
 # ============================================================
 def get_dates_keyboard():
     """Генерирует кнопки с датами на 14 дней вперед"""
     keyboard = []
     today = now_msk().date()
     
-    # Делаем по 2 даты в ряд
     row = []
     for i in range(14):
         d = today + timedelta(days=i)
         day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
         label = f"{d.strftime('%d.%m')} ({day_names[d.weekday()]})"
-        
-        # callback_data передает дату в формате базы данных (YYYY-MM-DD)
         callback_data = f"date_pick:{d.strftime('%Y-%m-%d')}"
         
         row.append(InlineKeyboardButton(text=label, callback_data=callback_data))
@@ -332,7 +329,7 @@ async def cmd_today(message: Message):
 
 
 # ============================================================
-# /add
+# /add (ТОЛЬКО ВЫБОР ДАТЫ КНОПКОЙ)
 # ============================================================
 class AddSchedule(StatesGroup):
     waiting_date = State()
@@ -351,6 +348,7 @@ async def cmd_add(message: Message, state: FSMContext):
     )
 
 
+# Обработчик нажатия на кнопку с датой при добавлении
 @router.callback_query(F.data.startswith("date_pick:"), AddSchedule.waiting_date)
 async def process_date_callback(callback: CallbackQuery, state: FSMContext):
     chosen_date = callback.data.split(":")[1]
@@ -362,6 +360,15 @@ async def process_date_callback(callback: CallbackQuery, state: FSMContext):
         "Введите время (например 09:00-10:00):"
     )
     await callback.answer()
+
+
+# Если пользователь все же пытается ввести текст вместо нажатия кнопки
+@router.message(AddSchedule.waiting_date)
+async def reject_text_date(message: Message):
+    await message.answer(
+        "⚠️ Пожалуйста, выберите дату, нажав на кнопку выше.",
+        reply_markup=get_dates_keyboard()
+    )
 
 
 @router.message(AddSchedule.waiting_time)
@@ -592,16 +599,13 @@ async def apply_edit(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    # Если вдруг ввели текст вместо кнопки для даты
+    # Если пытаются ввести текст для даты
     if field == "date":
-        try:
-            parsed = datetime.strptime(new_value, "%Y-%m-%d").date()
-        except ValueError:
-            await message.answer("Неверный формат. ГГГГ-ММ-ДД:")
-            return
-        if parsed < now_msk().date():
-            await message.answer("Дата уже прошла. Введите сегодняшнюю или будущую дату:")
-            return
+        await message.answer(
+            "⚠️ Пожалуйста, выберите дату, нажав на кнопку выше.",
+            reply_markup=get_dates_keyboard()
+        )
+        return
 
     editor = message.from_user.full_name or str(message.from_user.id)
     conn = get_db()
