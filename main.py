@@ -21,19 +21,14 @@ from db import init_db, DB_PATH
 # ============================================================
 # КОНФИГУРАЦИЯ (из переменных окружения Bothost)
 # ============================================================
-# Токен Bothost передает автоматически, но мы оставляем fallback для локального теста
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "ВАШ_ТОКЕН_ДЛЯ_ЛОКАЛЬНОГО_ТЕСТА")
-
-# Пароль из переменной окружения (задайте в Bothost: ACCESS_PASSWORD)
 ACCESS_PASSWORD = os.environ.get("ACCESS_PASSWORD", "herewegoagain")
 
-# ID главного администратора из переменной окружения (задайте в Bothost: CHIEF_ADMIN_IDS)
 raw_admins = os.environ.get("CHIEF_ADMIN_IDS", "")
 CHIEF_ADMIN_IDS = set()
 if raw_admins:
     CHIEF_ADMIN_IDS = {int(i.strip()) for i in raw_admins.split(",") if i.strip().isdigit()}
 else:
-    # Заглушка, чтобы бот запустился, если переменная забыта
     CHIEF_ADMIN_IDS = {123456789} 
 
 ADMIN_IDS = CHIEF_ADMIN_IDS
@@ -101,6 +96,36 @@ def authorize_user(user_id: int, name: str):
         conn.commit()
     finally:
         conn.close()
+
+
+# ============================================================
+# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: КАЛЕНДАРЬ
+# ============================================================
+def get_dates_keyboard():
+    """Генерирует кнопки с датами на 14 дней вперед"""
+    keyboard = []
+    today = now_msk().date()
+    
+    # Делаем по 2 даты в ряд
+    row = []
+    for i in range(14):
+        d = today + timedelta(days=i)
+        day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+        label = f"{d.strftime('%d.%m')} ({day_names[d.weekday()]})"
+        
+        # callback_data передает дату в формате базы данных (YYYY-MM-DD)
+        callback_data = f"date_pick:{d.strftime('%Y-%m-%d')}"
+        
+        row.append(InlineKeyboardButton(text=label, callback_data=callback_data))
+        
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+            
+    if row:
+        keyboard.append(row)
+        
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
 # ============================================================
@@ -320,25 +345,23 @@ class AddSchedule(StatesGroup):
 @router.message(Command("add"))
 async def cmd_add(message: Message, state: FSMContext):
     await state.set_state(AddSchedule.waiting_date)
-    await message.answer("Введите дату (ГГГГ-ММ-ДД):")
+    await message.answer(
+        "Выберите дату из списка:", 
+        reply_markup=get_dates_keyboard()
+    )
 
 
-@router.message(AddSchedule.waiting_date)
-async def process_date(message: Message, state: FSMContext):
-    text = message.text.strip()
-    try:
-        parsed = datetime.strptime(text, "%Y-%m-%d").date()
-    except ValueError:
-        await message.answer("Неверный формат. Введите ГГГГ-ММ-ДД:")
-        return
-
-    if parsed < now_msk().date():
-        await message.answer("Дата уже прошла. Введите сегодняшнюю или будущую дату:")
-        return
-
-    await state.update_data(date=text)
+@router.callback_query(F.data.startswith("date_pick:"), AddSchedule.waiting_date)
+async def process_date_callback(callback: CallbackQuery, state: FSMContext):
+    chosen_date = callback.data.split(":")[1]
+    await state.update_data(date=chosen_date)
     await state.set_state(AddSchedule.waiting_time)
-    await message.answer("Введите время (например 09:00-10:00):")
+    
+    await callback.message.edit_text(
+        f"Выбрана дата: {chosen_date}\n\n"
+        "Введите время (например 09:00-10:00):"
+    )
+    await callback.answer()
 
 
 @router.message(AddSchedule.waiting_time)
@@ -518,9 +541,42 @@ async def start_edit(callback: CallbackQuery, state: FSMContext):
     if field not in ALLOWED_FIELDS:
         await callback.answer("Недопустимое поле.", show_alert=True)
         return
+    
     await state.update_data(row_id=int(row_id), field=field)
     await state.set_state(EditField.waiting_value)
-    await callback.message.answer(f"Введите новое значение для поля «{field}»:")
+    
+    if field == "date":
+        await callback.message.answer(
+            "Выберите новую дату:", 
+            reply_markup=get_dates_keyboard()
+        )
+    else:
+        await callback.message.answer(f"Введите новое значение для поля «{field}»:")
+    
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("date_pick:"), EditField.waiting_value)
+async def apply_date_edit(callback: CallbackQuery, state: FSMContext):
+    new_date = callback.data.split(":")[1]
+    data = await state.get_data()
+    row_id = data["row_id"]
+    field = data["field"]
+    editor = callback.from_user.full_name or str(callback.from_user.id)
+
+    conn = get_db()
+    try:
+        conn.execute(f"""
+            UPDATE schedule SET {field} = ?, updated_at = ?, updated_by = ?
+            WHERE id = ? AND deleted_at IS NULL
+        """, (new_date, ts_msk(), editor, row_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+    log_action(row_id, "update", editor, f"{field}={new_date}")
+    await callback.message.edit_text(f"✅ Обновлено: {field} → {new_date}")
+    await state.clear()
     await callback.answer()
 
 
@@ -536,6 +592,7 @@ async def apply_edit(message: Message, state: FSMContext):
         await state.clear()
         return
 
+    # Если вдруг ввели текст вместо кнопки для даты
     if field == "date":
         try:
             parsed = datetime.strptime(new_value, "%Y-%m-%d").date()
