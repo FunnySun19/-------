@@ -11,6 +11,7 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
+    # Основная таблица расписания (и прокаты, и поручения)
     # record_type: 'rental' (прокат) или 'task' (поручение)
     c.execute("""
         CREATE TABLE IF NOT EXISTS schedule (
@@ -21,6 +22,7 @@ def init_db():
             task_type TEXT NOT NULL,
             duration TEXT DEFAULT '',
             horse_name TEXT DEFAULT '',
+            comment TEXT DEFAULT '',
             required_instructors INTEGER DEFAULT 1,
             assigned_instructors TEXT DEFAULT '',
             created_by TEXT,
@@ -32,6 +34,7 @@ def init_db():
         )
     """)
 
+    # Журнал действий (кто, что и когда сделал)
     c.execute("""
         CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,6 +46,7 @@ def init_db():
         )
     """)
 
+    # Привязка Telegram ID к реальному имени сотрудника
     c.execute("""
         CREATE TABLE IF NOT EXISTS employees (
             tg_id INTEGER PRIMARY KEY,
@@ -50,6 +54,7 @@ def init_db():
         )
     """)
 
+    # Авторизованные пользователи (ввели пароль)
     c.execute("""
         CREATE TABLE IF NOT EXISTS auth_users (
             tg_id INTEGER PRIMARY KEY,
