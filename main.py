@@ -13,6 +13,11 @@ from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton,
 )
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import (
+    Message, CallbackQuery,
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton,
+)
 
 from db import init_db, DB_PATH
 
@@ -100,10 +105,14 @@ def get_dates_keyboard():
 def get_times_keyboard():
     keyboard, row = [], []
     for hour in range(8, 21):
-        row.append(InlineKeyboardButton(text=f"{hour:02d}:00", callback_data=f"time_pick:{hour:02d}:00"))
-        if len(row) == 4:
-            keyboard.append(row)
-            row = []
+        for minute in (0, 30):
+            if hour == 20 and minute == 30:
+                continue
+            t = f"{hour:02d}:{minute:02d}"
+            row.append(InlineKeyboardButton(text=t, callback_data=f"time_pick:{t}"))
+            if len(row) == 4:
+                keyboard.append(row)
+                row = []
     if row:
         keyboard.append(row)
     keyboard.append([InlineKeyboardButton(text="⬅️ Назад к датам", callback_data="back_to_dates")])
@@ -144,6 +153,20 @@ def get_instructors_count_keyboard():
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_durs")]
     ])
 
+def get_main_reply_keyboard(is_admin: bool = False):
+    rows = [
+        [KeyboardButton(text="📅 Расписание"), KeyboardButton(text="📍 Сегодня")],
+        [KeyboardButton(text="➕ Добавить"), KeyboardButton(text="✏️ Редактировать")],
+        [KeyboardButton(text="👤 Регистрация"), KeyboardButton(text="ℹ️ Старт")],
+    ]
+    if is_admin:
+        rows.append([KeyboardButton(text="📋 Журнал"), KeyboardButton(text="🗑 Корзина")])
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        is_persistent=True,   # клавиатура не скрывается
+    )
+
 # ============================================================
 # 3. ИНИЦИАЛИЗАЦИЯ БОТА И ЗАЩИТА ПАРОЛЕМ
 # ============================================================
@@ -179,7 +202,10 @@ async def handle_password(message: Message):
         return await message.answer("Вы уже авторизованы.")
     name = message.from_user.full_name or str(message.from_user.id)
     authorize_user(message.from_user.id, name)
-    await message.answer(f"✅ Доступ открыт, {name}.\nОтправьте /start")
+    await message.answer(
+        f"✅ Доступ открыт, {name}.\nОтправьте /start или нажмите кнопку ниже.",
+        reply_markup=get_main_reply_keyboard(is_chief_admin(message.from_user.id))
+    )
 
 
 @router.message(Command("start"))
@@ -187,6 +213,7 @@ async def cmd_start(message: Message):
     if not is_authorized(message.from_user.id):
         return await message.answer("🔒 Введите пароль:")
     text = ("🐴 <b>Панель управления</b>\n\n"
+            "Пользуйтесь кнопками внизу или командами:\n"
             "/today — на сегодня\n"
             "/schedule — все записи\n"
             "/add — создать запись\n"
@@ -194,7 +221,11 @@ async def cmd_start(message: Message):
             "/register — привязать имя")
     if is_chief_admin(message.from_user.id):
         text += "\n/log — журнал действий\n/revoke — отозвать доступ"
-    await message.answer(text, parse_mode="HTML")
+    await message.answer(
+        text,
+        parse_mode="HTML",
+        reply_markup=get_main_reply_keyboard(is_chief_admin(message.from_user.id))
+    )
 
 
 # ============================================================
@@ -810,8 +841,51 @@ async def restore(callback: CallbackQuery):
 
 
 # ============================================================
-# 13. ЗАПУСК
+# 13. КНОПКИ ПОСТОЯННОЙ КЛАВИАТУРЫ (дублируют команды)
 # ============================================================
+@router.message(F.text == "ℹ️ Старт")
+async def kb_start(message: Message):
+    await cmd_start(message)
+
+
+@router.message(F.text == "📅 Расписание")
+async def kb_schedule(message: Message):
+    await cmd_schedule(message)
+
+
+@router.message(F.text == "📍 Сегодня")
+async def kb_today(message: Message):
+    await cmd_today(message)
+
+
+@router.message(F.text == "➕ Добавить")
+async def kb_add(message: Message, state: FSMContext):
+    await cmd_add(message, state)
+
+
+@router.message(F.text == "✏️ Редактировать")
+async def kb_edit(message: Message):
+    await cmd_edit(message)
+
+
+@router.message(F.text == "👤 Регистрация")
+async def kb_register(message: Message, state: FSMContext):
+    await cmd_register(message, state)
+
+
+@router.message(F.text == "📋 Журнал")
+async def kb_log(message: Message):
+    await cmd_log(message)
+
+
+@router.message(F.text == "🗑 Корзина")
+async def kb_trash(message: Message):
+    await cmd_trash(message)
+
+# ============================================================
+# 14. ЗАПУСК
+# ============================================================
+
 async def main():
     init_db()
     await dp.start_polling(bot)
