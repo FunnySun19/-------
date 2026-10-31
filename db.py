@@ -1,40 +1,33 @@
 import sqlite3
 import os
 
-# Bothost использует /app/data для постоянного хранения файлов.
-# Если папка существует, используем её, иначе (локально) - текущую директорию.
 if os.path.exists("/app/data"):
     DB_PATH = "/app/data/stable.db"
 else:
     DB_PATH = "stable.db"
 
-
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
+    # record_type: 'rental' (прокат) или 'task' (поручение)
     c.execute("""
         CREATE TABLE IF NOT EXISTS schedule (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            record_type TEXT NOT NULL,
             date TEXT NOT NULL,
-            time_slot TEXT NOT NULL,
-            instructor TEXT NOT NULL,
-            horse_name TEXT NOT NULL,
+            time_slot TEXT DEFAULT '',
             task_type TEXT NOT NULL,
+            duration TEXT DEFAULT '',
+            horse_name TEXT DEFAULT '',
+            required_instructors INTEGER DEFAULT 1,
+            assigned_instructors TEXT DEFAULT '',
             created_by TEXT,
             created_by_name TEXT,
             updated_at TEXT,
             updated_by TEXT,
             deleted_at TEXT DEFAULT NULL,
             deleted_by TEXT DEFAULT NULL
-        )
-    """)
-
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS horses (
-            name TEXT PRIMARY KEY,
-            status TEXT DEFAULT 'доступна',
-            care_notes TEXT DEFAULT ''
         )
     """)
 
