@@ -140,9 +140,9 @@ def get_instructors_count_keyboard():
         [InlineKeyboardButton(text="1", callback_data="instr_count:1"),
          InlineKeyboardButton(text="2", callback_data="instr_count:2"),
          InlineKeyboardButton(text="3", callback_data="instr_count:3")],
+        [InlineKeyboardButton(text="🚫 Не нужно", callback_data="instr_count:0")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_durs")]
     ])
-
 
 # ============================================================
 # 3. ИНИЦИАЛИЗАЦИЯ БОТА И ЗАЩИТА ПАРОЛЕМ
@@ -345,18 +345,21 @@ async def process_rental_type(callback: CallbackQuery, state: FSMContext):
 async def process_duration(callback: CallbackQuery, state: FSMContext):
     await state.update_data(duration=callback.data.split(":")[1])
     await state.set_state(AddSchedule.waiting_instr_count)
-    await callback.message.edit_text("Сколько нужно инструкторов?", reply_markup=get_instructors_count_keyboard())
+    await callback.message.edit_text(
+        "Сколько нужно инструкторов?\n"
+        "<i>(можно пропустить — тогда без ограничения)</i>",
+        reply_markup=get_instructors_count_keyboard(),
+        parse_mode="HTML"
+    )
     await callback.answer()
-
 
 @router.callback_query(F.data.startswith("instr_count:"), AddSchedule.waiting_instr_count)
 async def process_instr_count(callback: CallbackQuery, state: FSMContext):
-    count = int(callback.data.split(":")[1])
+    count = int(callback.data.split(":")[1])  # 0 = без ограничения
     await state.update_data(required_instructors=count)
     await state.set_state(AddSchedule.waiting_comment)
     await callback.message.edit_text("Введите комментарий к записи (или отправьте «-», чтобы пропустить):")
     await callback.answer()
-
 
 @router.message(AddSchedule.waiting_comment)
 async def process_comment(message: Message, state: FSMContext):
@@ -370,18 +373,10 @@ async def process_comment(message: Message, state: FSMContext):
     try:
         c = conn.cursor()
         c.execute(
-            "SELECT id FROM schedule WHERE date=? AND time_slot=? AND record_type='rental' AND deleted_at IS NULL",
-            (data["date"], data["time_slot"])
-        )
-        if c.fetchone():
-            await message.answer("⚠️ На это время уже есть прокат.")
-            await state.clear()
-            return
-        c.execute(
             "INSERT INTO schedule (record_type, date, time_slot, task_type, duration, comment, "
             "required_instructors, created_by, created_by_name, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ('rental', data["date"], data["time_slot"], data["task_type"], data["duration"],
-             comment, data["required_instructors"], str(message.from_user.id),
+             comment, data.get("required_instructors", 0), str(message.from_user.id),
              message.from_user.full_name, ts_msk())
         )
         conn.commit()
@@ -390,10 +385,11 @@ async def process_comment(message: Message, state: FSMContext):
         conn.close()
 
     log_action(new_id, "create_rental", message.from_user.full_name, str(data))
+    req_text = "без ограничения" if data.get("required_instructors", 0) == 0 else str(data["required_instructors"])
     await message.answer(
         f"✅ Слот проката создан!\n📅 {data['date']} 🕒 {data['time_slot']}\n"
         f"🏇 {data['task_type']} ({data['duration']})\n"
-        f"👤 Нужно: {data['required_instructors']}\n"
+        f"👤 Нужно инструкторов: {req_text}\n"
         f"💬 {comment if comment else 'без комментария'}",
         parse_mode="HTML"
     )
@@ -450,6 +446,9 @@ async def process_task_comment(message: Message, state: FSMContext):
 # ============================================================
 # 7. КАРТОЧКА ЗАПИСИ (ПРОСМОТР И РЕДАКТИРОВАНИЕ)
 # ============================================================
+# ============================================================
+# 7. КАРТОЧКА ЗАПИСИ (ПРОСМОТР И РЕДАКТИРОВАНИЕ)
+# ============================================================
 @router.callback_query(F.data.startswith("edit:"))
 async def show_card(callback: CallbackQuery):
     row_id = int(callback.data.split(":")[1])
@@ -475,12 +474,14 @@ async def show_card(callback: CallbackQuery):
     btn_rows = []
     if r_type == 'rental':
         comm_str = f"\n💬 {comm}" if comm else ""
+        req_text = "без ограничения" if req == 0 else str(req)
         text = (f"📝 <b>Прокат #{row_id}</b>\n\n"
                 f"📅 {date} 🕒 {time_slot}\n"
                 f"🏇 {task} ({dur}){comm_str}\n"
-                f"👤 Нужно: <b>{req}</b>\n"
+                f"👤 Нужно: <b>{req_text}</b>\n"
                 f"✅ Взяли: <b>{assigned_text}</b>")
-        if len(assigned_list) < req:
+        # req == 0 → без лимита, кнопка "Я возьму" показывается всегда
+        if req == 0 or len(assigned_list) < req:
             btn_rows.append([InlineKeyboardButton(text="🙋‍♂️ Я возьму", callback_data=f"take:{row_id}")])
         if user_name in assigned_list:
             btn_rows.append([InlineKeyboardButton(text="❌ Отказаться", callback_data=f"untake:{row_id}")])
