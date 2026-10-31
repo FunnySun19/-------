@@ -1,6 +1,7 @@
 import sqlite3
 import os
 
+# Если папка /app/data существует (Bothost), используем её для сохранения базы
 if os.path.exists("/app/data"):
     DB_PATH = "/app/data/stable.db"
 else:
