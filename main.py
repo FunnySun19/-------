@@ -40,6 +40,16 @@ def today_msk() -> str: return now_msk().strftime("%Y-%m-%d")
 def ts_msk() -> str: return now_msk().strftime("%Y-%m-%d %H:%M:%S")
 def is_chief_admin(user_id: int) -> bool: return user_id in CHIEF_ADMIN_IDS
 
+# Красивое отображение даты (11 ноября 2026, Пн)
+def format_date_ru(date_str: str) -> str:
+    try:
+        d = datetime.strptime(date_str, "%Y-%m-%d")
+        months = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"]
+        day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+        return f"{d.day} {months[d.month - 1]} {d.year} ({day_names[d.weekday()]})"
+    except:
+        return date_str
+
 def get_db() -> sqlite3.Connection: 
     return sqlite3.connect(DB_PATH, timeout=20)
 
@@ -85,10 +95,12 @@ def get_main_menu_keyboard(user_id: int):
 def get_dates_keyboard():
     keyboard, row = [], []
     today = now_msk().date()
+    months_short = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
+    day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    
     for i in range(14):
         d = today + timedelta(days=i)
-        day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
-        label = f"{d.strftime('%d.%m')} ({day_names[d.weekday()]})"
+        label = f"{d.day} {months_short[d.month-1]} ({day_names[d.weekday()]})"
         row.append(InlineKeyboardButton(text=label, callback_data=f"date_pick:{d.strftime('%Y-%m-%d')}"))
         if len(row) == 2:
             keyboard.append(row)
@@ -134,7 +146,7 @@ def get_instructors_count_keyboard():
     ])
 
 # ============================================================
-# 3. БОТ, MIDDLEWARE
+# 3. БОТ И MIDDLEWARE
 # ============================================================
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -177,10 +189,9 @@ async def handle_password(message: Message):
 async def cmd_start(message: Message):
     if not is_authorized(message.from_user.id): 
         return await message.answer("🔒 Введите пароль:")
-    text = "🐴 <b>Панель управления</b>\n\nВыберите действие на клавиатуре ниже:"
+    text = "🐴 <b>Панель управления конюшней</b>\n\nВыберите действие:"
     await message.answer(text, parse_mode="HTML", reply_markup=get_main_menu_keyboard(message.from_user.id))
 
-# Обработчики Reply-кнопок
 @router.message(F.text == "📅 На сегодня")
 async def menu_today(message: Message): await cmd_today(message)
 
@@ -222,12 +233,10 @@ async def cmd_schedule(message: Message):
     
     by_date = {}
     for r in rows: by_date.setdefault(r[2], []).append(r)
-    lines = []
-    day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
     
+    lines = []
     for date, items in by_date.items():
-        d_obj = datetime.strptime(date, "%Y-%m-%d")
-        lines.append(f"📅 <b>{d_obj.strftime('%d.%m')} ({day_names[d_obj.weekday()]})</b>")
+        lines.append(f"📅 <b>{format_date_ru(date)}</b>")
         for r in items:
             _, r_type, _, time_slot, task, dur, comm, req, assigned = r
             assigned_names = ", ".join([x.split(":")[1] for x in assigned.split(",") if ":" in x]) if assigned else "❌"
@@ -242,7 +251,6 @@ async def cmd_schedule(message: Message):
     
     text = "\n".join(lines)
     for i in range(0, len(text), 4000): await message.answer(text[i:i+4000], parse_mode="HTML")
-    await message.answer("Чтобы взять запись, нажмите ✏️ Редактировать")
 
 @router.message(Command("today"))
 async def cmd_today(message: Message):
@@ -254,9 +262,9 @@ async def cmd_today(message: Message):
         rows = c.fetchall()
     finally: conn.close()
     
-    if not rows: return await message.answer(f"📅 <b>{now_msk().strftime('%d.%m.%Y')}</b>\nЗаписей нет.", parse_mode="HTML")
+    if not rows: return await message.answer(f"📅 <b>{format_date_ru(today)}</b>\nЗаписей нет.", parse_mode="HTML")
     
-    lines = [f"📅 <b>Сегодня, {now_msk().strftime('%d.%m.%Y')}</b>\n"]
+    lines = [f"📅 <b>Сегодня, {format_date_ru(today)}</b>\n"]
     for r in rows:
         _, r_type, time_slot, task, dur, comm, req, assigned = r
         assigned_names = ", ".join([x.split(":")[1] for x in assigned.split(",") if ":" in x]) if assigned else "❌"
@@ -269,7 +277,6 @@ async def cmd_today(message: Message):
             
     text = "\n".join(lines)
     for i in range(0, len(text), 4000): await message.answer(text[i:i+4000], parse_mode="HTML")
-    await message.answer("Чтобы взять запись, нажмите ✏️ Редактировать")
 
 @router.message(Command("my"))
 async def cmd_my_records(message: Message):
@@ -289,7 +296,7 @@ async def cmd_my_records(message: Message):
         _, r_type, date, time_slot, task = r
         icon = "🏇" if r_type == 'rental' else "📝"
         time_str = f"с {time_slot.split('-')[0]} до {time_slot.split('-')[1]}" if '-' in time_slot else time_slot
-        lines.append(f"{icon} {date} {time_str} | {task}")
+        lines.append(f"{icon} {format_date_ru(date)} {time_str} | {task}")
     
     await message.answer("\n".join(lines), parse_mode="HTML")
 
@@ -379,7 +386,7 @@ async def process_comment(message: Message, state: FSMContext):
         conn.commit()
     finally: conn.close()
     
-    await message.answer(f"✅ Слот проката создан!\n📅 {data['date']}\n🏇 {data['task_type']} ({data['duration']})\n👤 Нужно: {data['required_instructors']}\n💬 {comment if comment else 'без комментария'}", parse_mode="HTML")
+    await message.answer(f"✅ Слот проката создан!\n📅 {format_date_ru(data['date'])}\n🏇 {data['task_type']} ({data['duration']})\n👤 Нужно: {data['required_instructors']}\n💬 {comment if comment else 'без комментария'}", parse_mode="HTML")
     await state.clear()
 
 @router.message(AddSchedule.waiting_task_desc)
@@ -393,7 +400,7 @@ async def process_task_desc(message: Message, state: FSMContext):
                   ('task', data["date"], data["task_type"], str(message.from_user.id), message.from_user.full_name, ts_msk()))
         conn.commit()
     finally: conn.close()
-    await message.answer(f"✅ Поручение создано!\n📅 {data['date']}\n📝 {data['task_type']}", parse_mode="HTML")
+    await message.answer(f"✅ Поручение создано!\n📅 {format_date_ru(data['date'])}\n📝 {data['task_type']}", parse_mode="HTML")
     await state.clear()
 
 # ============================================================
@@ -454,11 +461,11 @@ async def show_card(callback: CallbackQuery):
     if r_type == 'rental':
         time_str = f"с {time_slot.split('-')[0]} до {time_slot.split('-')[1]}" if '-' in time_slot else time_slot
         comm_str = f"\n💬 {comm}" if comm else ""
-        text = f"📝 Прокат #{row_id}\n\n📅 {date} 🕒 {time_str}\n🏇 {task} ({dur}){comm_str}\n👤 Нужно: {req}\n✅ Взяли: {assigned_names}"
+        text = f"📝 Прокат #{row_id}\n\n📅 {format_date_ru(date)}\n🕒 {time_str}\n🏇 {task} ({dur}){comm_str}\n👤 Нужно: {req}\n✅ Взяли: {assigned_names}"
         if req == 0 or len(assigned_list) < req: btn_rows.append([InlineKeyboardButton(text="🙋‍♂️ Я возьму", callback_data=f"take:{row_id}")])
         if is_assigned: btn_rows.append([InlineKeyboardButton(text="❌ Отказаться", callback_data=f"untake:{row_id}")])
     else:
-        text = f"📝 Поручение #{row_id}\n\n📅 {date}\n📋 {task}\n✅ Сделает: {assigned_names}"
+        text = f"📝 Поручение #{row_id}\n\n📅 {format_date_ru(date)}\n📋 {task}\n✅ Сделает: {assigned_names}"
         if not is_assigned: btn_rows.append([InlineKeyboardButton(text="✅ Я сделаю", callback_data=f"take:{row_id}")])
         if is_assigned: btn_rows.append([InlineKeyboardButton(text="❌ Отказаться", callback_data=f"untake:{row_id}")])
 
@@ -504,9 +511,9 @@ async def take_slot(callback: CallbackQuery):
     finally: conn.close()
     
     if r_type == 'rental':
-        admin_text = f"🔔 <b>Слот взят!</b>\n📅 {date} 🕒 {time_slot}\n🏇 {task}\n👤 Взял: {name}"
+        admin_text = f"🔔 <b>Слот взят!</b>\n📅 {format_date_ru(date)}\n🕒 {time_slot}\n🏇 {task}\n👤 Взял: {name}"
     else:
-        admin_text = f"🔔 <b>Поручение взято!</b>\n📅 {date}\n📋 {task}\n👤 Взял: {name}"
+        admin_text = f"🔔 <b>Поручение взято!</b>\n📅 {format_date_ru(date)}\n📋 {task}\n👤 Взял: {name}"
     for admin_id in CHIEF_ADMIN_IDS:
         with suppress(Exception): await bot.send_message(admin_id, admin_text, parse_mode="HTML")
 
@@ -613,7 +620,7 @@ async def cmd_edit(message: Message):
         _, r_type, date, time_slot, task = r
         icon = "🏇" if r_type == 'rental' else "📝"
         time_str = f" {time_slot}" if time_slot else ""
-        buttons.append([InlineKeyboardButton(text=f"{icon} {date}{time_str} | {task}"[:60], callback_data=f"edit:{r[0]}")])
+        buttons.append([InlineKeyboardButton(text=f"{icon} {format_date_ru(date)}{time_str} | {task}"[:60], callback_data=f"edit:{r[0]}")])
     await message.answer("Выберите запись:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 class Register(StatesGroup):
@@ -687,7 +694,7 @@ async def cmd_trash(message: Message):
         conn.close()
     if not rows: 
         return await message.answer("Корзина пуста.")
-    buttons = [[InlineKeyboardButton(text=f"♻️ {r[2]} | {r[3]}"[:60], callback_data=f"restore:{r[0]}")] for r in rows]
+    buttons = [[InlineKeyboardButton(text=f"♻️ {format_date_ru(r[2])} | {r[3]}"[:60], callback_data=f"restore:{r[0]}")] for r in rows]
     await message.answer("Корзина:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 @router.callback_query(F.data.startswith("restore:"))
@@ -702,6 +709,22 @@ async def restore(callback: CallbackQuery):
     finally: 
         conn.close()
     await callback.answer("♻️ Восстановлено.")
+
+@router.message(Command("stats"))
+async def cmd_stats(message: Message):
+    if not is_chief_admin(message.from_user.id): 
+        return await message.answer("⛔ Нет прав.")
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        today = today_msk()
+        c.execute("SELECT COUNT(*) FROM schedule WHERE date = ? AND deleted_at IS NULL", (today,))
+        today_count = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM schedule WHERE date >= ? AND deleted_at IS NULL", (today,))
+        total_count = c.fetchone()[0]
+    finally: 
+        conn.close()
+    await message.answer(f"📊 <b>Статистика</b>\n\nСегодня записей: <b>{today_count}</b>\nВсего предстоящих: <b>{total_count}</b>", parse_mode="HTML")
 
 # ============================================================
 # 11. ЗАПУСК ЧЕРЕЗ WEBHOOK ДЛЯ BOTHOST
