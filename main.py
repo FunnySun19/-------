@@ -357,7 +357,7 @@ async def process_task_desc(message: Message, state: FSMContext):
     await state.clear()
 
 # ============================================================
-# 7. КАРТОЧКА (ДЛЯ /edit)
+# 7. КАРТОЧКА (ДЛЯ /edit) — УБРАНА РАЗМЕТКА, ЧТОБЫ НЕ ПАДАЛО
 # ============================================================
 @router.callback_query(F.data.startswith("edit:"))
 async def show_card(callback: CallbackQuery):
@@ -389,13 +389,14 @@ async def show_card(callback: CallbackQuery):
     btn_rows = []
     if r_type == 'rental':
         comm_str = f"\n💬 {comm}" if comm else ""
-        text = f"📝 <b>Прокат #{row_id}</b>\n\n📅 {date} 🕒 {time_slot}\n🏇 {task} ({dur}){comm_str}\n👤 Нужно: <b>{req}</b>\n✅ Взяли: <b>{assigned_names}</b>"
+        # Используем обычный текст без <b> для безопасности
+        text = f"📝 Прокат #{row_id}\n\n📅 {date} 🕒 {time_slot}\n🏇 {task} ({dur}){comm_str}\n👤 Нужно: {req}\n✅ Взяли: {assigned_names}"
         if req == 0 or len(assigned_list) < req: 
             btn_rows.append([InlineKeyboardButton(text="🙋‍♂️ Я возьму", callback_data=f"take:{row_id}")])
         if is_assigned: 
             btn_rows.append([InlineKeyboardButton(text="❌ Отказаться", callback_data=f"untake:{row_id}")])
     else:
-        text = f"📝 <b>Поручение #{row_id}</b>\n\n📅 {date}\n🐎 Лошадь: {horse}\n📋 Задача: {task}\n✅ Сделает: <b>{assigned_names}</b>"
+        text = f"📝 Поручение #{row_id}\n\n📅 {date}\n🐎 Лошадь: {horse}\n📋 Задача: {task}\n✅ Сделает: {assigned_names}"
         if not is_assigned: 
             btn_rows.append([InlineKeyboardButton(text="✅ Я сделаю", callback_data=f"take:{row_id}")])
         if is_assigned: 
@@ -408,7 +409,7 @@ async def show_card(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=btn_rows)
     with suppress(TelegramBadRequest): 
-        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode=None) # parse_mode=None отключает HTML
     await callback.answer()
 
 # ============================================================
@@ -660,27 +661,23 @@ async def handle_webhook(request: web.Request):
 async def main():
     init_db()
     
-    # Ваш домен от Bothost (без https://)
+    # Ваш домен от Bothost
     WEBHOOK_HOST = "bot-1793300548-1325-funnysun.bothost.tech"
     WEBHOOK_PATH = "/webhook"
     WEBHOOK_URL = f"https://{WEBHOOK_HOST}{WEBHOOK_PATH}"
     
-    # Настраиваем вебхук в Telegram
     await bot.set_webhook(url=WEBHOOK_URL)
     print(f"Бот запущен на вебхуке: {WEBHOOK_URL}")
     
-    # Настраиваем веб-сервер
     app = web.Application()
     app.router.add_post(WEBHOOK_PATH, handle_webhook)
     
-    # Bothost передает порт через переменную PORT
     port = int(os.environ.get("PORT", 3000))
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
     
-    # Держим сервер включенным
     while True:
         await asyncio.sleep(3600)
 
