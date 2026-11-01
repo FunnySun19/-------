@@ -20,6 +20,7 @@ from db import init_db, DB_PATH
 # ============================================================
 # 1. КОНФИГУРАЦИЯ
 # ============================================================
+# Токен берется из переменных Bothost. В коде его быть не должно!
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("Переменная окружения BOT_TOKEN не задана!")
@@ -131,11 +132,11 @@ dp.include_router(router)
 
 @dp.errors()
 async def errors_handler(event: ErrorEvent):
-    # Если кнопка вызвала ошибку, бот мгновенно ответит "Ошибка", чтобы кнопка не висела
+    # Если кнопка вызвала ошибку, бот мгновенно ответит, чтобы кнопка не висела
     print(f"ERROR: {event.exception}")
     if isinstance(event.update.callback_query, CallbackQuery):
         with suppress(Exception):
-            await event.update.callback_query.answer("⚠️ Ошибка бота!", show_alert=True)
+            await event.update.callback_query.answer("⚠️ Ошибка. Попробуйте /start", show_alert=True)
     return True
 
 class AuthMiddleware(BaseMiddleware):
@@ -357,7 +358,7 @@ async def process_task_desc(message: Message, state: FSMContext):
     await state.clear()
 
 # ============================================================
-# 7. КАРТОЧКА (ДЛЯ /edit И ИЗ РАСПИСАНИЯ)
+# 7. КАРТОЧКА (ДЛЯ /edit)
 # ============================================================
 @router.callback_query(F.data.startswith("edit:"))
 async def show_card(callback: CallbackQuery):
