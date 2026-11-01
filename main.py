@@ -39,7 +39,6 @@ def ts_msk() -> str: return now_msk().strftime("%Y-%m-%d %H:%M:%S")
 def is_chief_admin(user_id: int) -> bool: return user_id in CHIEF_ADMIN_IDS
 
 def get_db() -> sqlite3.Connection: 
-    # timeout=20 предотвращает ошибку "database is locked" при одновременных нажатиях
     return sqlite3.connect(DB_PATH, timeout=20)
 
 def log_action(schedule_id, action, actor, details=""):
@@ -130,14 +129,10 @@ dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 
-# Глобальный перехватчик ошибок (чтобы кнопки не "крутились" вечно)
 @dp.errors()
 async def errors_handler(event: ErrorEvent):
-    # 1. Выводим ошибку в консоль Bothost (Runtime Logs)
     print("=== ОШИБКА ПРИ ОБРАБОТКЕ ===")
     traceback.print_exception(type(event.exception), event.exception, event.exception.__traceback__)
-
-    # 2. Отвечаем пользователю, если это было нажатие кнопки
     if isinstance(event.update.callback_query, CallbackQuery):
         with suppress(Exception):
             await event.update.callback_query.answer("⚠️ Ошибка бота. Попробуйте /start", show_alert=True)
@@ -149,16 +144,11 @@ async def errors_handler(event: ErrorEvent):
 class AuthMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         user = data.get("event_from_user")
-        if user is None: 
-            return await handler(event, data)
-        if is_authorized(user.id): 
-            return await handler(event, data)
+        if user is None: return await handler(event, data)
+        if is_authorized(user.id): return await handler(event, data)
         text = getattr(event, "text", None) or ""
-        if text.startswith("/start") or text == ACCESS_PASSWORD: 
-            return await handler(event, data)
-        # Пропускаем нажатия на кнопки, чтобы бот мог ответить "Вы не авторизованы"
-        if isinstance(event, CallbackQuery):
-            return await handler(event, data)
+        if text.startswith("/start") or text == ACCESS_PASSWORD: return await handler(event, data)
+        if isinstance(event, CallbackQuery): return await handler(event, data)
         return None
 
 dp.message.middleware(AuthMiddleware())
@@ -179,13 +169,13 @@ async def handle_password(message: Message):
 async def cmd_start(message: Message):
     if not is_authorized(message.from_user.id): 
         return await message.answer("🔒 Введите пароль:")
-    text = "🐴 <b>Панель управления</b>\n\n/today — на сегодня\n/schedule — все записи\n/add — создать запись\n/edit — редактировать/удалить\n/register — привязать имя"
+    text = "🐴 <b>Панель управления</b>\n\n/today — на сегодня\n/schedule — все записи (с кнопками)\n/add — создать запись\n/edit — редактировать/удалить\n/register — привязать имя"
     if is_chief_admin(message.from_user.id): 
         text += "\n/log — журнал действий\n/revoke — отозвать доступ"
     await message.answer(text, parse_mode="HTML")
 
 # ============================================================
-# 5. ПРОСМОТР
+# 5. ПРОСМОТР (С КНОПКАМИ ПОД КАЖДОЙ ЗАПИСЬЮ)
 # ============================================================
 @router.message(Command("schedule"))
 async def cmd_schedule(message: Message):
@@ -205,24 +195,30 @@ async def cmd_schedule(message: Message):
     for r in rows: by_date.setdefault(r[2], []).append(r)
     
     lines = []
+    buttons = []
     day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    
     for date, items in by_date.items():
         d_obj = datetime.strptime(date, "%Y-%m-%d")
         lines.append(f"📅 <b>{d_obj.strftime('%d.%m')} ({day_names[d_obj.weekday()]})</b>")
         for r in items:
-            _, r_type, _, time_slot, task, dur, horse, comm, req, assigned = r
+            row_id, r_type, _, time_slot, task, dur, horse, comm, req, assigned = r
             assigned_names = ", ".join([x.split(":")[1] for x in assigned.split(",") if ":" in x]) if assigned else "❌"
             
             if r_type == 'rental':
                 comm_str = f"\n     💬 {comm}" if comm else ""
                 lines.append(f"  🏇 {time_slot} | {task} ({dur}){comm_str}\n     👤 Нужно: {req} | Взяли: {assigned_names}")
+                # Добавляем кнопку для перехода в карточку
+                buttons.append([InlineKeyboardButton(text=f"Открыть: {time_slot} {task}", callback_data=f"edit:{row_id}")])
             else:
                 lines.append(f"  🐎 {time_slot} | {horse}: {task}\n     👤 Сделает: {assigned_names}")
+                buttons.append([InlineKeyboardButton(text=f"Открыть: {horse} ({task})", callback_data=f"edit:{row_id}")])
         lines.append("")
     
     text = "\n".join(lines)
+    # Отправляем текст с кнопками
     for i in range(0, len(text), 4000): 
-        await message.answer(text[i:i+4000], parse_mode="HTML")
+        await message.answer(text[i:i+4000], parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 @router.message(Command("today"))
 async def cmd_today(message: Message):
@@ -230,7 +226,7 @@ async def cmd_today(message: Message):
     conn = get_db()
     try:
         c = conn.cursor()
-        c.execute("SELECT record_type, time_slot, task_type, duration, horse_name, comment, required_instructors, assigned_instructors FROM schedule WHERE date = ? AND deleted_at IS NULL ORDER BY time_slot", (today,))
+        c.execute("SELECT id, record_type, time_slot, task_type, duration, horse_name, comment, required_instructors, assigned_instructors FROM schedule WHERE date = ? AND deleted_at IS NULL ORDER BY time_slot", (today,))
         rows = c.fetchall()
     finally: 
         conn.close()
@@ -239,19 +235,23 @@ async def cmd_today(message: Message):
         return await message.answer(f"📅 <b>{now_msk().strftime('%d.%m.%Y')}</b>\nЗаписей нет.", parse_mode="HTML")
     
     lines = [f"📅 <b>Сегодня, {now_msk().strftime('%d.%m.%Y')}</b>\n"]
+    buttons = []
+    
     for r in rows:
-        r_type, time_slot, task, dur, horse, comm, req, assigned = r
+        row_id, r_type, time_slot, task, dur, horse, comm, req, assigned = r
         assigned_names = ", ".join([x.split(":")[1] for x in assigned.split(",") if ":" in x]) if assigned else "❌"
         
         if r_type == 'rental': 
             comm_str = f"\n💬 {comm}" if comm else ""
             lines.append(f"🏇 {time_slot} | {task} ({dur}){comm_str}\n👤 Нужно: {req} | Взяли: {assigned_names}\n")
+            buttons.append([InlineKeyboardButton(text=f"Открыть: {time_slot} {task}", callback_data=f"edit:{row_id}")])
         else: 
             lines.append(f"🐎 {time_slot} | {horse}: {task}\n👤 Сделает: {assigned_names}\n")
+            buttons.append([InlineKeyboardButton(text=f"Открыть: {horse} ({task})", callback_data=f"edit:{row_id}")])
             
     text = "\n".join(lines)
     for i in range(0, len(text), 4000): 
-        await message.answer(text[i:i+4000], parse_mode="HTML")
+        await message.answer(text[i:i+4000], parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 # ============================================================
 # 6. СОЗДАНИЕ (/add)
@@ -365,7 +365,7 @@ async def process_task_desc(message: Message, state: FSMContext):
     await state.clear()
 
 # ============================================================
-# 7. КАРТОЧКА
+# 7. КАРТОЧКА (ДЛЯ /edit И ИЗ РАСПИСАНИЯ)
 # ============================================================
 @router.callback_query(F.data.startswith("edit:"))
 async def show_card(callback: CallbackQuery):
@@ -398,7 +398,7 @@ async def show_card(callback: CallbackQuery):
     if r_type == 'rental':
         comm_str = f"\n💬 {comm}" if comm else ""
         text = f"📝 <b>Прокат #{row_id}</b>\n\n📅 {date} 🕒 {time_slot}\n🏇 {task} ({dur}){comm_str}\n👤 Нужно: <b>{req}</b>\n✅ Взяли: <b>{assigned_names}</b>"
-        if len(assigned_list) < req: 
+        if req == 0 or len(assigned_list) < req: 
             btn_rows.append([InlineKeyboardButton(text="🙋‍♂️ Я возьму", callback_data=f"take:{row_id}")])
         if is_assigned: 
             btn_rows.append([InlineKeyboardButton(text="❌ Отказаться", callback_data=f"untake:{row_id}")])
@@ -446,7 +446,8 @@ async def take_slot(callback: CallbackQuery):
         
         if any(uid == user_id for uid, uname in alist):
             return await callback.answer("Вы уже записаны!", show_alert=True)
-        if req > 0 and len(alist) >= req and len(alist) > 0: 
+        # Разрешаем записаться, даже если нужно 0 (на случай ошибки), но если нужно > 0, проверяем лимит
+        if req > 0 and len(alist) >= req: 
             return await callback.answer("Мест нет.", show_alert=True)
             
         alist.append((user_id, name))
