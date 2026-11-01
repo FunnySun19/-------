@@ -39,7 +39,6 @@ def today_msk() -> str: return now_msk().strftime("%Y-%m-%d")
 def ts_msk() -> str: return now_msk().strftime("%Y-%m-%d %H:%M:%S")
 def is_chief_admin(user_id: int) -> bool: return user_id in CHIEF_ADMIN_IDS
 
-# Красивое отображение даты
 def format_date_ru(date_str: str) -> str:
     try:
         d = datetime.strptime(date_str, "%Y-%m-%d")
@@ -205,7 +204,7 @@ async def menu_my(message: Message): await cmd_my_records(message)
 async def menu_profile(message: Message): await message.answer("Чтобы привязать имя, отправьте /register")
 
 # ============================================================
-# 5. ПРОСМОТР (КРАСИВАЯ ДАТА)
+# 5. ПРОСМОТР (С КНОПКАМИ ПЕРЕХОДА)
 # ============================================================
 @router.message(Command("schedule"))
 async def cmd_schedule(message: Message):
@@ -223,22 +222,26 @@ async def cmd_schedule(message: Message):
     for r in rows: by_date.setdefault(r[2], []).append(r)
     
     lines = []
+    buttons = []
+    
     for date, items in by_date.items():
         lines.append(f"📅 <b>{format_date_ru(date)}</b>")
         for r in items:
-            _, r_type, _, time_slot, task, dur, comm, req, assigned = r
+            row_id, r_type, _, time_slot, task, dur, comm, req, assigned = r
             assigned_names = ", ".join([x.split(":")[1] for x in assigned.split(",") if ":" in x]) if assigned else "❌"
             
             if r_type == 'rental':
                 time_str = f"с {time_slot.split('-')[0]} до {time_slot.split('-')[1]}" if '-' in time_slot else time_slot
                 comm_str = f"\n     💬 {comm}" if comm else ""
                 lines.append(f"  🏇 {time_str} | {task} ({dur}){comm_str}\n     👤 Нужно: {req} | Взяли: {assigned_names}")
+                buttons.append([InlineKeyboardButton(text=f"Открыть: {time_str} {task}"[:60], callback_data=f"edit:{row_id}")])
             else:
                 lines.append(f"  📝 {task}\n     👤 Сделает: {assigned_names}")
+                buttons.append([InlineKeyboardButton(text=f"Открыть: {task}"[:60], callback_data=f"edit:{row_id}")])
         lines.append("")
     
     text = "\n".join(lines)
-    for i in range(0, len(text), 4000): await message.answer(text[i:i+4000], parse_mode="HTML")
+    await message.answer(text[:4000], parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 @router.message(Command("today"))
 async def cmd_today(message: Message):
@@ -253,18 +256,22 @@ async def cmd_today(message: Message):
     if not rows: return await message.answer(f"📅 <b>{format_date_ru(today)}</b>\nЗаписей нет.", parse_mode="HTML")
     
     lines = [f"📅 <b>Сегодня, {format_date_ru(today)}</b>\n"]
+    buttons = []
+    
     for r in rows:
-        _, r_type, time_slot, task, dur, comm, req, assigned = r
+        row_id, r_type, time_slot, task, dur, comm, req, assigned = r
         assigned_names = ", ".join([x.split(":")[1] for x in assigned.split(",") if ":" in x]) if assigned else "❌"
         if r_type == 'rental': 
             time_str = f"с {time_slot.split('-')[0]} до {time_slot.split('-')[1]}" if '-' in time_slot else time_slot
             comm_str = f"\n💬 {comm}" if comm else ""
             lines.append(f"🏇 {time_str} | {task} ({dur}){comm_str}\n👤 Нужно: {req} | Взяли: {assigned_names}\n")
+            buttons.append([InlineKeyboardButton(text=f"Открыть: {time_str} {task}"[:60], callback_data=f"edit:{row_id}")])
         else: 
             lines.append(f"📝 {task}\n👤 Сделает: {assigned_names}\n")
+            buttons.append([InlineKeyboardButton(text=f"Открыть: {task}"[:60], callback_data=f"edit:{row_id}")])
             
     text = "\n".join(lines)
-    for i in range(0, len(text), 4000): await message.answer(text[i:i+4000], parse_mode="HTML")
+    await message.answer(text[:4000], parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 @router.message(Command("my"))
 async def cmd_my_records(message: Message):
