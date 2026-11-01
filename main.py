@@ -12,6 +12,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     Message, CallbackQuery, ErrorEvent, Update,
     InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 )
 from aiogram.exceptions import TelegramBadRequest
 from aiohttp import web
@@ -71,6 +72,18 @@ def authorize_user(user_id: int, name: str):
 # ============================================================
 # 2. КЛАВИАТУРЫ
 # ============================================================
+def get_main_menu_keyboard():
+    """Главное меню (Reply-кнопки)"""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📅 На сегодня"), KeyboardButton(text="📋 Все записи")],
+            [KeyboardButton(text="➕ Создать запись"), KeyboardButton(text="✏️ Редактировать")],
+            [KeyboardButton(text="👤 Мой профиль")]
+        ],
+        resize_keyboard=True,
+        input_field_placeholder="Выберите действие..."
+    )
+
 def get_dates_keyboard():
     keyboard, row = [], []
     today = now_msk().date()
@@ -152,7 +165,7 @@ dp.message.middleware(AuthMiddleware())
 dp.callback_query.middleware(AuthMiddleware())
 
 # ============================================================
-# 4. СТАРТ
+# 4. СТАРТ (С REPLY-КНОПКАМИ)
 # ============================================================
 @router.message(F.text == ACCESS_PASSWORD)
 async def handle_password(message: Message):
@@ -160,16 +173,38 @@ async def handle_password(message: Message):
         return await message.answer("Вы уже авторизованы. Отправьте /start")
     name = message.from_user.full_name or str(message.from_user.id)
     authorize_user(message.from_user.id, name)
-    await message.answer(f"✅ Доступ открыт, {name}.\nОтправьте /start")
+    await message.answer(f"✅ Доступ открыт, {name}.\nОтправьте /start", reply_markup=ReplyKeyboardRemove())
 
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     if not is_authorized(message.from_user.id): 
         return await message.answer("🔒 Введите пароль:")
-    text = "🐴 <b>Панель управления</b>\n\n/today — на сегодня\n/schedule — все записи\n/add — создать запись\n/edit — открыть карточку (взять/удалить)\n/register — привязать имя"
-    if is_chief_admin(message.from_user.id): 
-        text += "\n/log — журнал действий\n/revoke — отозвать доступ"
-    await message.answer(text, parse_mode="HTML")
+    
+    text = "🐴 <b>Панель управления конюшней</b>\n\nВыберите действие на клавиатуре ниже:"
+    
+    # Показываем Reply-клавиатуру с кнопками меню
+    await message.answer(text, parse_mode="HTML", reply_markup=get_main_menu_keyboard())
+
+# Обработчики Reply-кнопок главного меню
+@router.message(F.text == "📅 На сегодня")
+async def menu_today(message: Message):
+    await cmd_today(message)
+
+@router.message(F.text == "📋 Все записи")
+async def menu_schedule(message: Message):
+    await cmd_schedule(message)
+
+@router.message(F.text == "➕ Создать запись")
+async def menu_add(message: Message, state: FSMContext):
+    await cmd_add(message, state)
+
+@router.message(F.text == "✏️ Редактировать")
+async def menu_edit(message: Message):
+    await cmd_edit(message)
+
+@router.message(F.text == "👤 Мой профиль")
+async def menu_profile(message: Message):
+    await message.answer("Чтобы привязать имя к аккаунту (для напоминаний), отправьте /register")
 
 # ============================================================
 # 5. ПРОСМОТР (ТЕКСТ)
@@ -212,7 +247,7 @@ async def cmd_schedule(message: Message):
     for i in range(0, len(text), 4000): 
         await message.answer(text[i:i+4000], parse_mode="HTML")
     
-    await message.answer("Чтобы взять запись, отправьте /edit")
+    await message.answer("Чтобы взять запись, нажмите ✏️ Редактировать")
 
 @router.message(Command("today"))
 async def cmd_today(message: Message):
@@ -243,7 +278,7 @@ async def cmd_today(message: Message):
     for i in range(0, len(text), 4000): 
         await message.answer(text[i:i+4000], parse_mode="HTML")
     
-    await message.answer("Чтобы взять запись, отправьте /edit")
+    await message.answer("Чтобы взять запись, нажмите ✏️ Редактировать")
 
 # ============================================================
 # 6. СОЗДАНИЕ (/add)
@@ -657,7 +692,7 @@ async def cmd_revoke(message: Message):
         c.execute("DELETE FROM auth_users WHERE tg_id = ?", (target_id,))
         deleted = c.rowcount
         conn.commit()
-    finally: 
+    finally:
         conn.close()
     await message.answer(f"✅ Доступ {target_id} отозван." if deleted else f"Пользователь не найден.")
 
@@ -695,7 +730,7 @@ async def restore(callback: CallbackQuery):
 # ============================================================
 async def handle_webhook(request: web.Request):
     update_data = await request.json()
-    print("UPDATE KEYS:", list(update_data.keys())) # Диагностика: покажет, пришел ли callback_query
+    print("UPDATE KEYS:", list(update_data.keys())) # Диагностика
     update = Update(**update_data)
     await dp.feed_update(bot, update)
     return web.Response(text="OK")
