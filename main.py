@@ -183,7 +183,7 @@ async def cmd_start(message: Message):
     text = "🐴 <b>Панель управления конюшней</b>\n\nВыберите действие на клавиатуре ниже:"
     await message.answer(text, parse_mode="HTML", reply_markup=get_main_menu_keyboard())
 
-# Обработчики Reply-кнопок главного меню
+# Обработчики Reply-кнопок главного меню (передают состояние!)
 @router.message(F.text == "📅 На сегодня")
 async def menu_today(message: Message):
     await cmd_today(message)
@@ -194,7 +194,7 @@ async def menu_schedule(message: Message):
 
 @router.message(F.text == "➕ Создать запись")
 async def menu_add(message: Message, state: FSMContext):
-    await cmd_add(message, state)
+    await cmd_add(message, state) # Передаем state!
 
 @router.message(F.text == "✏️ Редактировать")
 async def menu_edit(message: Message):
