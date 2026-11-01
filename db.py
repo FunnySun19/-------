@@ -1,29 +1,25 @@
 import sqlite3
 import os
 
-# В Amvera постоянное хранилище находится в /data
-# Локально (для тестов) база будет создаваться рядом с файлом
-if os.path.exists("/data"):
-    DB_PATH = "/data/stable.db"
+if os.path.exists("/app/data"):
+    DB_PATH = "/app/data/stable.db"
 else:
     DB_PATH = "stable.db"
 
 def init_db():
-    """Создает таблицы при первом запуске."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
-    # Таблица расписания (прокаты и поручения)
+    # Таблица расписания
     c.execute("""
         CREATE TABLE IF NOT EXISTS schedule (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            record_type TEXT NOT NULL,
+            record_type TEXT NOT NULL,          -- 'rental' или 'task'
             date TEXT NOT NULL,
-            time_slot TEXT DEFAULT '',
-            task_type TEXT NOT NULL,
-            duration TEXT DEFAULT '',
-            horse_name TEXT DEFAULT '',
-            comment TEXT DEFAULT '',
+            time_slot TEXT DEFAULT '',          -- Только для проката
+            task_type TEXT NOT NULL,            -- Тип проката или задача
+            duration TEXT DEFAULT '',           -- Только для проката
+            comment TEXT DEFAULT '',            -- Комментарий
             required_instructors INTEGER DEFAULT 1,
             assigned_instructors TEXT DEFAULT '',
             created_by TEXT,
@@ -47,7 +43,7 @@ def init_db():
         )
     """)
 
-    # Связка ID и имени сотрудника
+    # Связка ID и имени
     c.execute("""
         CREATE TABLE IF NOT EXISTS employees (
             tg_id INTEGER PRIMARY KEY,
@@ -55,12 +51,21 @@ def init_db():
         )
     """)
 
-    # Авторизованные пользователи
+    # Авторизация
     c.execute("""
         CREATE TABLE IF NOT EXISTS auth_users (
             tg_id INTEGER PRIMARY KEY,
             name TEXT,
             authorized_at TEXT
+        )
+    """)
+
+    # Лошади
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS horses (
+            name TEXT PRIMARY KEY,
+            status TEXT DEFAULT 'Доступна',
+            notes TEXT DEFAULT ''
         )
     """)
 

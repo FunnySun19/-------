@@ -73,12 +73,11 @@ def authorize_user(user_id: int, name: str):
 # 2. КЛАВИАТУРЫ
 # ============================================================
 def get_main_menu_keyboard():
-    """Главное меню (Reply-кнопки)"""
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📅 На сегодня"), KeyboardButton(text="📋 Все записи")],
             [KeyboardButton(text="➕ Создать запись"), KeyboardButton(text="✏️ Редактировать")],
-            [KeyboardButton(text="👤 Мой профиль")]
+            [KeyboardButton(text="🐎 Лошади"), KeyboardButton(text="👤 Мой профиль")]
         ],
         resize_keyboard=True,
         input_field_placeholder="Выберите действие..."
@@ -112,7 +111,7 @@ def get_times_keyboard():
 def get_main_type_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🏇 Прокат", callback_data="main_type:rental")],
-        [InlineKeyboardButton(text="🐎 Поручение по лошади", callback_data="main_type:task")]
+        [InlineKeyboardButton(text="🐎 Поручение", callback_data="main_type:task")]
     ])
 
 def get_rental_type_keyboard():
@@ -136,7 +135,7 @@ def get_instructors_count_keyboard():
     ])
 
 # ============================================================
-# 3. БОТ, MIDDLEWARE И ОБРАБОТЧИК ОШИБОК
+# 3. БОТ И MIDDLEWARE
 # ============================================================
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -165,7 +164,7 @@ dp.message.middleware(AuthMiddleware())
 dp.callback_query.middleware(AuthMiddleware())
 
 # ============================================================
-# 4. СТАРТ (С REPLY-КНОПКАМИ)
+# 4. СТАРТ
 # ============================================================
 @router.message(F.text == ACCESS_PASSWORD)
 async def handle_password(message: Message):
@@ -179,11 +178,10 @@ async def handle_password(message: Message):
 async def cmd_start(message: Message):
     if not is_authorized(message.from_user.id): 
         return await message.answer("🔒 Введите пароль:")
-    
     text = "🐴 <b>Панель управления конюшней</b>\n\nВыберите действие на клавиатуре ниже:"
     await message.answer(text, parse_mode="HTML", reply_markup=get_main_menu_keyboard())
 
-# Обработчики Reply-кнопок главного меню (передают состояние!)
+# Обработчики Reply-кнопок
 @router.message(F.text == "📅 На сегодня")
 async def menu_today(message: Message):
     await cmd_today(message)
@@ -194,18 +192,22 @@ async def menu_schedule(message: Message):
 
 @router.message(F.text == "➕ Создать запись")
 async def menu_add(message: Message, state: FSMContext):
-    await cmd_add(message, state) # Передаем state!
+    await cmd_add(message, state)
 
 @router.message(F.text == "✏️ Редактировать")
 async def menu_edit(message: Message):
     await cmd_edit(message)
 
+@router.message(F.text == "🐎 Лошади")
+async def menu_horses(message: Message):
+    await cmd_horses(message)
+
 @router.message(F.text == "👤 Мой профиль")
 async def menu_profile(message: Message):
-    await message.answer("Чтобы привязать имя к аккаунту (для напоминаний), отправьте /register")
+    await message.answer("Чтобы привязать имя к аккаунту, отправьте /register")
 
 # ============================================================
-# 5. ПРОСМОТР (ТЕКСТ)
+# 5. ПРОСМОТР
 # ============================================================
 @router.message(Command("schedule"))
 async def cmd_schedule(message: Message):
@@ -213,7 +215,7 @@ async def cmd_schedule(message: Message):
     conn = get_db()
     try:
         c = conn.cursor()
-        c.execute("SELECT id, record_type, date, time_slot, task_type, duration, horse_name, comment, required_instructors, assigned_instructors FROM schedule WHERE date >= ? AND deleted_at IS NULL ORDER BY date, time_slot", (today,))
+        c.execute("SELECT id, record_type, date, time_slot, task_type, duration, comment, required_instructors, assigned_instructors FROM schedule WHERE date >= ? AND deleted_at IS NULL ORDER BY date, time_slot", (today,))
         rows = c.fetchall()
     finally: 
         conn.close()
@@ -231,20 +233,19 @@ async def cmd_schedule(message: Message):
         d_obj = datetime.strptime(date, "%Y-%m-%d")
         lines.append(f"📅 <b>{d_obj.strftime('%d.%m')} ({day_names[d_obj.weekday()]})</b>")
         for r in items:
-            _, r_type, _, time_slot, task, dur, horse, comm, req, assigned = r
+            _, r_type, _, time_slot, task, dur, comm, req, assigned = r
             assigned_names = ", ".join([x.split(":")[1] for x in assigned.split(",") if ":" in x]) if assigned else "❌"
             
             if r_type == 'rental':
                 comm_str = f"\n     💬 {comm}" if comm else ""
                 lines.append(f"  🏇 {time_slot} | {task} ({dur}){comm_str}\n     👤 Нужно: {req} | Взяли: {assigned_names}")
             else:
-                lines.append(f"  🐎 {time_slot} | {horse}: {task}\n     👤 Сделает: {assigned_names}")
+                lines.append(f"  📝 {task} {comm}\n     👤 Сделает: {assigned_names}")
         lines.append("")
     
     text = "\n".join(lines)
     for i in range(0, len(text), 4000): 
         await message.answer(text[i:i+4000], parse_mode="HTML")
-    
     await message.answer("Чтобы взять запись, нажмите ✏️ Редактировать")
 
 @router.message(Command("today"))
@@ -253,7 +254,7 @@ async def cmd_today(message: Message):
     conn = get_db()
     try:
         c = conn.cursor()
-        c.execute("SELECT id, record_type, time_slot, task_type, duration, horse_name, comment, required_instructors, assigned_instructors FROM schedule WHERE date = ? AND deleted_at IS NULL ORDER BY time_slot", (today,))
+        c.execute("SELECT id, record_type, time_slot, task_type, duration, comment, required_instructors, assigned_instructors FROM schedule WHERE date = ? AND deleted_at IS NULL ORDER BY time_slot", (today,))
         rows = c.fetchall()
     finally: 
         conn.close()
@@ -263,23 +264,22 @@ async def cmd_today(message: Message):
     
     lines = [f"📅 <b>Сегодня, {now_msk().strftime('%d.%m.%Y')}</b>\n"]
     for r in rows:
-        _, r_type, time_slot, task, dur, horse, comm, req, assigned = r
+        _, r_type, time_slot, task, dur, comm, req, assigned = r
         assigned_names = ", ".join([x.split(":")[1] for x in assigned.split(",") if ":" in x]) if assigned else "❌"
         
         if r_type == 'rental': 
             comm_str = f"\n💬 {comm}" if comm else ""
             lines.append(f"🏇 {time_slot} | {task} ({dur}){comm_str}\n👤 Нужно: {req} | Взяли: {assigned_names}\n")
         else: 
-            lines.append(f"🐎 {time_slot} | {horse}: {task}\n👤 Сделает: {assigned_names}\n")
+            lines.append(f"📝 {task} {comm}\n👤 Сделает: {assigned_names}\n")
             
     text = "\n".join(lines)
     for i in range(0, len(text), 4000): 
         await message.answer(text[i:i+4000], parse_mode="HTML")
-    
     await message.answer("Чтобы взять запись, нажмите ✏️ Редактировать")
 
 # ============================================================
-# 6. СОЗДАНИЕ (/add)
+# 6. СОЗДАНИЕ
 # ============================================================
 class AddSchedule(StatesGroup):
     waiting_main_type = State()
@@ -289,7 +289,6 @@ class AddSchedule(StatesGroup):
     waiting_duration = State()
     waiting_instr_count = State()
     waiting_comment = State()
-    waiting_task_horse = State()
     waiting_task_desc = State()
 
 @router.message(Command("add"))
@@ -315,9 +314,9 @@ async def process_date(callback: CallbackQuery, state: FSMContext):
         with suppress(TelegramBadRequest):
             await callback.message.edit_text("Выберите время:", reply_markup=get_times_keyboard())
     else:
-        await state.set_state(AddSchedule.waiting_task_horse)
+        await state.set_state(AddSchedule.waiting_task_desc)
         with suppress(TelegramBadRequest):
-            await callback.message.edit_text("Введите кличку лошади:")
+            await callback.message.edit_text("Введите комментарий/задачу (например: почистить денник):")
 
 @router.callback_query(F.data.startswith("time_pick:"), AddSchedule.waiting_time)
 async def process_time(callback: CallbackQuery, state: FSMContext):
@@ -350,7 +349,7 @@ async def process_instr_count(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AddSchedule.waiting_comment)
     await callback.answer()
     with suppress(TelegramBadRequest):
-        await callback.message.edit_text("Введите комментарий (или отправьте «-»):")
+        await callback.message.edit_text("Введите комментарий к прокату (или отправьте «-»):")
 
 @router.message(AddSchedule.waiting_comment)
 async def process_comment(message: Message, state: FSMContext):
@@ -376,12 +375,6 @@ async def process_comment(message: Message, state: FSMContext):
     await message.answer(f"✅ Слот проката создан!\n📅 {data['date']} 🕒 {data['time_slot']}\n🏇 {data['task_type']} ({data['duration']})\n👤 Нужно: {data['required_instructors']}\n💬 {comment if comment else 'без комментария'}", parse_mode="HTML")
     await state.clear()
 
-@router.message(AddSchedule.waiting_task_horse)
-async def process_task_horse(message: Message, state: FSMContext):
-    await state.update_data(horse_name=message.text.strip())
-    await state.set_state(AddSchedule.waiting_task_desc)
-    await message.answer("Что нужно сделать?")
-
 @router.message(AddSchedule.waiting_task_desc)
 async def process_task_desc(message: Message, state: FSMContext):
     await state.update_data(task_type=message.text.strip())
@@ -389,16 +382,16 @@ async def process_task_desc(message: Message, state: FSMContext):
     conn = get_db()
     try:
         c = conn.cursor()
-        c.execute("INSERT INTO schedule (record_type, date, task_type, horse_name, created_by, created_by_name, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                  ('task', data["date"], data["task_type"], data["horse_name"], str(message.from_user.id), message.from_user.full_name, ts_msk()))
+        c.execute("INSERT INTO schedule (record_type, date, task_type, created_by, created_by_name, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                  ('task', data["date"], data["task_type"], str(message.from_user.id), message.from_user.full_name, ts_msk()))
         conn.commit()
     finally: 
         conn.close()
-    await message.answer(f"✅ Поручение создано!\n📅 {data['date']}\n🐎 {data['horse_name']}: {data['task_type']}", parse_mode="HTML")
+    await message.answer(f"✅ Поручение создано!\n📅 {data['date']}\n📝 {data['task_type']}", parse_mode="HTML")
     await state.clear()
 
 # ============================================================
-# 7. ОБРАБОТЧИКИ КНОПОК "НАЗАД"
+# 7. КНОПКИ "НАЗАД"
 # ============================================================
 @router.callback_query(F.data == "back_to_dates", AddSchedule.waiting_time)
 async def back_to_dates(callback: CallbackQuery, state: FSMContext):
@@ -429,7 +422,7 @@ async def back_to_durs(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text("Выберите длительность:", reply_markup=get_durations_keyboard())
 
 # ============================================================
-# 8. КАРТОЧКА (ДЛЯ /edit)
+# 8. КАРТОЧКА (С УВЕДОМЛЕНИЕМ И ОТМЕНОЙ)
 # ============================================================
 @router.callback_query(F.data.startswith("edit:"))
 async def show_card(callback: CallbackQuery):
@@ -438,7 +431,7 @@ async def show_card(callback: CallbackQuery):
     conn = get_db()
     try:
         c = conn.cursor()
-        c.execute("SELECT record_type, date, time_slot, task_type, duration, horse_name, comment, required_instructors, assigned_instructors FROM schedule WHERE id = ? AND deleted_at IS NULL", (row_id,))
+        c.execute("SELECT record_type, date, time_slot, task_type, duration, comment, required_instructors, assigned_instructors FROM schedule WHERE id = ? AND deleted_at IS NULL", (row_id,))
         row = c.fetchone()
     finally: 
         conn.close()
@@ -446,8 +439,7 @@ async def show_card(callback: CallbackQuery):
     if not row: 
         return await callback.answer("Не найдено.")
     
-    r_type, date, time_slot, task, dur, horse, comm, req, assigned = row
-    
+    r_type, date, time_slot, task, dur, comm, req, assigned = row
     assigned_list = []
     if assigned:
         for item in assigned.split(","):
@@ -467,27 +459,26 @@ async def show_card(callback: CallbackQuery):
         if is_assigned: 
             btn_rows.append([InlineKeyboardButton(text="❌ Отказаться", callback_data=f"untake:{row_id}")])
     else:
-        text = f"📝 Поручение #{row_id}\n\n📅 {date}\n🐎 Лошадь: {horse}\n📋 Задача: {task}\n✅ Сделает: {assigned_names}"
+        text = f"📝 Поручение #{row_id}\n\n📅 {date}\n📋 {task}\n✅ Сделает: {assigned_names}"
         if not is_assigned: 
             btn_rows.append([InlineKeyboardButton(text="✅ Я сделаю", callback_data=f"take:{row_id}")])
         if is_assigned: 
             btn_rows.append([InlineKeyboardButton(text="❌ Отказаться", callback_data=f"untake:{row_id}")])
 
+    # Кнопка отмены для админа
+    if is_chief_admin(user_id):
+        btn_rows.append([InlineKeyboardButton(text="🗑 Отменить запись", callback_data=f"cancel:{row_id}")])
+
     btn_rows.append([InlineKeyboardButton(text="✏️ Изменить дату", callback_data=f"field:{row_id}:date")])
     if r_type == 'rental':
         btn_rows.append([InlineKeyboardButton(text="✏️ Изменить время", callback_data=f"field:{row_id}:time_slot")])
-    btn_rows.append([InlineKeyboardButton(text="🗑 Удалить", callback_data=f"softdel:{row_id}")])
+    btn_rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_edit")])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=btn_rows)
     with suppress(TelegramBadRequest): 
         await callback.message.edit_text(text, reply_markup=keyboard, parse_mode=None) 
-    
-    if callback.data.startswith("edit:"):
-        await callback.answer()
+    await callback.answer()
 
-# ============================================================
-# 9. ВЗЯТЬ / ОТКАЗАТЬСЯ
-# ============================================================
 @router.callback_query(F.data.startswith("take:"))
 async def take_slot(callback: CallbackQuery):
     row_id = int(callback.data.split(":")[1])
@@ -500,8 +491,8 @@ async def take_slot(callback: CallbackQuery):
         emp = c.fetchone()
         name = emp[0] if emp else (callback.from_user.full_name or str(user_id))
         
-        c.execute("SELECT required_instructors, assigned_instructors FROM schedule WHERE id = ?", (row_id,))
-        req, assigned = c.fetchone()
+        c.execute("SELECT record_type, date, time_slot, task_type, required_instructors, assigned_instructors FROM schedule WHERE id = ?", (row_id,))
+        r_type, date, time_slot, task, req, assigned = c.fetchone()
         
         alist = []
         if assigned:
@@ -524,8 +515,18 @@ async def take_slot(callback: CallbackQuery):
     finally: 
         conn.close()
     
+    # Уведомление админу
+    if r_type == 'rental':
+        admin_text = f"🔔 <b>Иван взял слот!</b>\n📅 {date} 🕒 {time_slot}\n🏇 {task}\n👤 Взял: {name}"
+    else:
+        admin_text = f"🔔 <b>Взято поручение!</b>\n📅 {date}\n📋 {task}\n👤 Взял: {name}"
+        
+    for admin_id in CHIEF_ADMIN_IDS:
+        with suppress(Exception):
+            await bot.send_message(admin_id, admin_text, parse_mode="HTML")
+
     log_action(row_id, "assign", name, "Взял")
-    await show_card(callback) 
+    await show_card(callback)
 
 @router.callback_query(F.data.startswith("untake:"))
 async def untake_slot(callback: CallbackQuery):
@@ -557,8 +558,21 @@ async def untake_slot(callback: CallbackQuery):
     log_action(row_id, "unassign", str(user_id), "Отказался")
     await show_card(callback) 
 
+@router.callback_query(F.data.startswith("cancel:"))
+async def cancel_slot(callback: CallbackQuery):
+    if not is_chief_admin(callback.from_user.id):
+        return await callback.answer("⛔ Только админ может отменить запись.", show_alert=True)
+    
+    row_id = int(callback.data.split(":")[1])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Да, отменить", callback_data=f"delconf:{row_id}"),
+        InlineKeyboardButton(text="❌ Нет", callback_data=f"edit:{row_id}")
+    ]])
+    await callback.message.edit_text(f"Вы уверены, что хотите отменить запись #{row_id}?", reply_markup=kb)
+    await callback.answer()
+
 # ============================================================
-# 10. РЕДАКТИРОВАНИЕ И УДАЛЕНИЕ
+# 9. РЕДАКТИРОВАНИЕ И УДАЛЕНИЕ
 # ============================================================
 class EditField(StatesGroup):
     waiting_val = State()
@@ -590,17 +604,6 @@ async def apply_edit(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text("✅ Обновлено.")
     await state.clear()
 
-@router.callback_query(F.data.startswith("softdel:"))
-async def softdel(callback: CallbackQuery):
-    row_id = int(callback.data.split(":")[1])
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Да", callback_data=f"delconf:{row_id}"),
-        InlineKeyboardButton(text="❌ Нет", callback_data=f"edit:{row_id}")
-    ]])
-    await callback.answer()
-    with suppress(TelegramBadRequest):
-        await callback.message.edit_text(f"Удалить #{row_id}?", reply_markup=kb)
-
 @router.callback_query(F.data.startswith("delconf:"))
 async def delconf(callback: CallbackQuery):
     row_id = int(callback.data.split(":")[1])
@@ -612,7 +615,38 @@ async def delconf(callback: CallbackQuery):
         conn.close()
     await callback.answer()
     with suppress(TelegramBadRequest):
-        await callback.message.edit_text("🗑 Удалено.")
+        await callback.message.edit_text("🗑 Запись отменена.")
+
+# ============================================================
+# 10. ЛОШАДИ
+# ============================================================
+@router.message(Command("horses"))
+async def cmd_horses(message: Message):
+    conn = get_db()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT name, status, notes FROM horses ORDER BY name")
+        rows = c.fetchall()
+    finally: 
+        conn.close()
+
+    if not rows: 
+        return await message.answer("Информация о лошадях пока не добавлена.")
+
+    lines = ["🐎 <b>Список лошадей</b>\n"]
+    for name, status, notes in rows:
+        lines.append(f"<b>{name}</b> | {status}")
+        if notes:
+            lines.append(f"  _{notes}_")
+
+    text = "\n".join(lines)
+    await message.answer(text, parse_mode="HTML")
+    await message.answer("Чтобы добавить/изменить лошадь, отправьте /addhorse")
+
+@router.message(Command("addhorse"))
+async def cmd_addhorse(message: Message, state: FSMContext):
+    await state.set_state(Register.waiting_name)
+    await message.answer("Введите кличку лошади:")
 
 # ============================================================
 # 11. /edit, /register, /log, /revoke, /trash
@@ -632,9 +666,16 @@ async def cmd_edit(message: Message):
     buttons = []
     for r in rows:
         _, r_type, date, time_slot, task = r
-        icon = "🏇" if r_type == 'rental' else "🐎"
+        icon = "🏇" if r_type == 'rental' else "📝"
         buttons.append([InlineKeyboardButton(text=f"{icon} {date} {time_slot} | {task}"[:60], callback_data=f"edit:{r[0]}")])
     await message.answer("Выберите запись:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+@router.callback_query(F.data == "menu_edit")
+async def back_to_edit_menu(callback: CallbackQuery):
+    await callback.answer()
+    with suppress(TelegramBadRequest):
+        await callback.message.delete()
+    await cmd_edit(callback.message)
 
 class Register(StatesGroup):
     waiting_name = State()
@@ -728,7 +769,7 @@ async def restore(callback: CallbackQuery):
 # ============================================================
 async def handle_webhook(request: web.Request):
     update_data = await request.json()
-    print("UPDATE KEYS:", list(update_data.keys())) # Диагностика
+    # print("UPDATE KEYS:", list(update_data.keys())) # Диагностика
     update = Update(**update_data)
     await dp.feed_update(bot, update)
     return web.Response(text="OK")
@@ -741,7 +782,6 @@ async def main():
     WEBHOOK_PATH = "/webhook"
     WEBHOOK_URL = f"https://{WEBHOOK_HOST}{WEBHOOK_PATH}"
     
-    # ВАЖНО: Явно указываем allowed_updates, чтобы Telegram присылал нажатия кнопок!
     await bot.set_webhook(url=WEBHOOK_URL, allowed_updates=["message", "callback_query"])
     print(f"Бот запущен на вебхуке: {WEBHOOK_URL}")
     
