@@ -10,10 +10,11 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
-    Message, CallbackQuery, ErrorEvent,
+    Message, CallbackQuery, ErrorEvent, Update,
     InlineKeyboardMarkup, InlineKeyboardButton,
 )
 from aiogram.exceptions import TelegramBadRequest
+from aiohttp import web
 
 from db import init_db, DB_PATH
 
@@ -660,13 +661,36 @@ async def restore(callback: CallbackQuery):
         await callback.message.edit_text("♻️ Восстановлено.")
 
 # ============================================================
-# 11. ЗАПУСК ДЛЯ AMVERA (LONG POLLING)
+# 11. ЗАПУСК ЧЕРЕЗ WEBHOOK ДЛЯ BOTHOST
 # ============================================================
+async def handle_webhook(request: web.Request):
+    update_data = await request.json()
+    update = Update(**update_data)
+    await dp.feed_update(bot, update)
+    return web.Response(text="OK")
+
 async def main():
     init_db()
-    print("Бот запущен на Long Polling (Amvera).")
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+    
+    # Ваш домен от Bothost
+    WEBHOOK_HOST = "bot-1793300548-1325-funnysun.bothost.tech"
+    WEBHOOK_PATH = "/webhook"
+    WEBHOOK_URL = f"https://{WEBHOOK_HOST}{WEBHOOK_PATH}"
+    
+    await bot.set_webhook(url=WEBHOOK_URL)
+    print(f"Бот запущен на вебхуке: {WEBHOOK_URL}")
+    
+    app = web.Application()
+    app.router.add_post(WEBHOOK_PATH, handle_webhook)
+    
+    port = int(os.environ.get("PORT", 3000))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == "__main__":
     asyncio.run(main())
