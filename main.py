@@ -181,8 +181,6 @@ async def cmd_start(message: Message):
         return await message.answer("🔒 Введите пароль:")
     
     text = "🐴 <b>Панель управления конюшней</b>\n\nВыберите действие на клавиатуре ниже:"
-    
-    # Показываем Reply-клавиатуру с кнопками меню
     await message.answer(text, parse_mode="HTML", reply_markup=get_main_menu_keyboard())
 
 # Обработчики Reply-кнопок главного меню
@@ -692,7 +690,7 @@ async def cmd_revoke(message: Message):
         c.execute("DELETE FROM auth_users WHERE tg_id = ?", (target_id,))
         deleted = c.rowcount
         conn.commit()
-    finally:
+    finally: 
         conn.close()
     await message.answer(f"✅ Доступ {target_id} отозван." if deleted else f"Пользователь не найден.")
 
