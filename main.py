@@ -672,8 +672,8 @@ async def handle_webhook(request: web.Request):
 async def main():
     init_db()
     
-    # Ваш домен от Bothost
-    WEBHOOK_HOST = "bot-1793300548-1325-funnysun.bothost.tech"
+    # ВАШ НОВЫЙ ДОМЕН ОТ BOTHOST
+    WEBHOOK_HOST = "bot-1793550751-7255-funnysun.bothost.tech"
     WEBHOOK_PATH = "/webhook"
     WEBHOOK_URL = f"https://{WEBHOOK_HOST}{WEBHOOK_PATH}"
     
