@@ -1,7 +1,7 @@
 import sqlite3
 import os
 
-# Путь к базе данных (в Bothost сохраняется в /app/data)
+# Путь к базе данных в Bothost (постоянное хранилище)
 if os.path.exists("/app/data"):
     DB_PATH = "/app/data/stable.db"
 else:
@@ -24,7 +24,7 @@ def init_db():
             horse_name TEXT DEFAULT '',
             comment TEXT DEFAULT '',
             required_instructors INTEGER DEFAULT 1,
-            assigned_instructors TEXT DEFAULT '',  -- Храним строку вида "ID1:Имя1, ID2:Имя2"
+            assigned_instructors TEXT DEFAULT '',
             created_by TEXT,
             created_by_name TEXT,
             updated_at TEXT,

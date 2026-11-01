@@ -1,6 +1,7 @@
 import asyncio
 import sqlite3
 import os
+import traceback
 from datetime import datetime, timezone, timedelta
 from contextlib import suppress
 
@@ -9,7 +10,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
-    Message, CallbackQuery, 
+    Message, CallbackQuery, ErrorEvent,
     InlineKeyboardMarkup, InlineKeyboardButton,
 )
 from aiogram.exceptions import TelegramBadRequest
@@ -36,7 +37,10 @@ def now_msk() -> datetime: return datetime.now(MSK)
 def today_msk() -> str: return now_msk().strftime("%Y-%m-%d")
 def ts_msk() -> str: return now_msk().strftime("%Y-%m-%d %H:%M:%S")
 def is_chief_admin(user_id: int) -> bool: return user_id in CHIEF_ADMIN_IDS
-def get_db() -> sqlite3.Connection: return sqlite3.connect(DB_PATH)
+
+def get_db() -> sqlite3.Connection: 
+    # timeout=20 предотвращает ошибку "database is locked" при одновременных нажатиях
+    return sqlite3.connect(DB_PATH, timeout=20)
 
 def log_action(schedule_id, action, actor, details=""):
     conn = get_db()
@@ -119,20 +123,42 @@ def get_instructors_count_keyboard():
     ])
 
 # ============================================================
-# 3. БОТ И MIDDLEWARE
+# 3. БОТ, MIDDLEWARE И ОБРАБОТЧИК ОШИБОК
 # ============================================================
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 
+# Глобальный перехватчик ошибок (чтобы кнопки не "крутились" вечно)
+@dp.errors()
+async def errors_handler(event: ErrorEvent):
+    # 1. Выводим ошибку в консоль Bothost (Runtime Logs)
+    print("=== ОШИБКА ПРИ ОБРАБОТКЕ ===")
+    traceback.print_exception(type(event.exception), event.exception, event.exception.__traceback__)
+
+    # 2. Отвечаем пользователю, если это было нажатие кнопки
+    if isinstance(event.update.callback_query, CallbackQuery):
+        with suppress(Exception):
+            await event.update.callback_query.answer("⚠️ Ошибка бота. Попробуйте /start", show_alert=True)
+    elif isinstance(event.update.message, Message):
+        with suppress(Exception):
+            await event.update.message.answer("⚠️ Ошибка бота. Попробуйте /start")
+    return True
+
 class AuthMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         user = data.get("event_from_user")
-        if user is None: return await handler(event, data)
-        if is_authorized(user.id): return await handler(event, data)
+        if user is None: 
+            return await handler(event, data)
+        if is_authorized(user.id): 
+            return await handler(event, data)
         text = getattr(event, "text", None) or ""
-        if text.startswith("/start") or text == ACCESS_PASSWORD: return await handler(event, data)
+        if text.startswith("/start") or text == ACCESS_PASSWORD: 
+            return await handler(event, data)
+        # Пропускаем нажатия на кнопки, чтобы бот мог ответить "Вы не авторизованы"
+        if isinstance(event, CallbackQuery):
+            return await handler(event, data)
         return None
 
 dp.message.middleware(AuthMiddleware())
@@ -143,16 +169,19 @@ dp.callback_query.middleware(AuthMiddleware())
 # ============================================================
 @router.message(F.text == ACCESS_PASSWORD)
 async def handle_password(message: Message):
-    if is_authorized(message.from_user.id): return await message.answer("Вы уже авторизованы.")
+    if is_authorized(message.from_user.id): 
+        return await message.answer("Вы уже авторизованы. Отправьте /start")
     name = message.from_user.full_name or str(message.from_user.id)
     authorize_user(message.from_user.id, name)
     await message.answer(f"✅ Доступ открыт, {name}.\nОтправьте /start")
 
 @router.message(Command("start"))
 async def cmd_start(message: Message):
-    if not is_authorized(message.from_user.id): return await message.answer("🔒 Введите пароль:")
+    if not is_authorized(message.from_user.id): 
+        return await message.answer("🔒 Введите пароль:")
     text = "🐴 <b>Панель управления</b>\n\n/today — на сегодня\n/schedule — все записи\n/add — создать запись\n/edit — редактировать/удалить\n/register — привязать имя"
-    if is_chief_admin(message.from_user.id): text += "\n/log — журнал действий\n/revoke — отозвать доступ"
+    if is_chief_admin(message.from_user.id): 
+        text += "\n/log — журнал действий\n/revoke — отозвать доступ"
     await message.answer(text, parse_mode="HTML")
 
 # ============================================================
@@ -166,9 +195,12 @@ async def cmd_schedule(message: Message):
         c = conn.cursor()
         c.execute("SELECT id, record_type, date, time_slot, task_type, duration, horse_name, comment, required_instructors, assigned_instructors FROM schedule WHERE date >= ? AND deleted_at IS NULL ORDER BY date, time_slot", (today,))
         rows = c.fetchall()
-    finally: conn.close()
+    finally: 
+        conn.close()
 
-    if not rows: return await message.answer("Расписание пусто.")
+    if not rows: 
+        return await message.answer("Расписание пусто.")
+    
     by_date = {}
     for r in rows: by_date.setdefault(r[2], []).append(r)
     
@@ -179,7 +211,6 @@ async def cmd_schedule(message: Message):
         lines.append(f"📅 <b>{d_obj.strftime('%d.%m')} ({day_names[d_obj.weekday()]})</b>")
         for r in items:
             _, r_type, _, time_slot, task, dur, horse, comm, req, assigned = r
-            # Извлекаем только имена из строки "ID:Имя, ID:Имя"
             assigned_names = ", ".join([x.split(":")[1] for x in assigned.split(",") if ":" in x]) if assigned else "❌"
             
             if r_type == 'rental':
@@ -190,7 +221,8 @@ async def cmd_schedule(message: Message):
         lines.append("")
     
     text = "\n".join(lines)
-    for i in range(0, len(text), 4000): await message.answer(text[i:i+4000], parse_mode="HTML")
+    for i in range(0, len(text), 4000): 
+        await message.answer(text[i:i+4000], parse_mode="HTML")
 
 @router.message(Command("today"))
 async def cmd_today(message: Message):
@@ -200,9 +232,11 @@ async def cmd_today(message: Message):
         c = conn.cursor()
         c.execute("SELECT record_type, time_slot, task_type, duration, horse_name, comment, required_instructors, assigned_instructors FROM schedule WHERE date = ? AND deleted_at IS NULL ORDER BY time_slot", (today,))
         rows = c.fetchall()
-    finally: conn.close()
+    finally: 
+        conn.close()
     
-    if not rows: return await message.answer(f"📅 <b>{now_msk().strftime('%d.%m.%Y')}</b>\nЗаписей нет.", parse_mode="HTML")
+    if not rows: 
+        return await message.answer(f"📅 <b>{now_msk().strftime('%d.%m.%Y')}</b>\nЗаписей нет.", parse_mode="HTML")
     
     lines = [f"📅 <b>Сегодня, {now_msk().strftime('%d.%m.%Y')}</b>\n"]
     for r in rows:
@@ -216,7 +250,8 @@ async def cmd_today(message: Message):
             lines.append(f"🐎 {time_slot} | {horse}: {task}\n👤 Сделает: {assigned_names}\n")
             
     text = "\n".join(lines)
-    for i in range(0, len(text), 4000): await message.answer(text[i:i+4000], parse_mode="HTML")
+    for i in range(0, len(text), 4000): 
+        await message.answer(text[i:i+4000], parse_mode="HTML")
 
 # ============================================================
 # 6. СОЗДАНИЕ (/add)
@@ -302,7 +337,8 @@ async def process_comment(message: Message, state: FSMContext):
         c.execute("INSERT INTO schedule (record_type, date, time_slot, task_type, duration, comment, required_instructors, created_by, created_by_name, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                   ('rental', data["date"], data["time_slot"], data["task_type"], data["duration"], comment, data["required_instructors"], str(message.from_user.id), message.from_user.full_name, ts_msk()))
         conn.commit()
-    finally: conn.close()
+    finally: 
+        conn.close()
     
     await message.answer(f"✅ Слот проката создан!\n📅 {data['date']} 🕒 {data['time_slot']}\n🏇 {data['task_type']} ({data['duration']})\n👤 Нужно: {data['required_instructors']}\n💬 {comment if comment else 'без комментария'}", parse_mode="HTML")
     await state.clear()
@@ -323,12 +359,13 @@ async def process_task_desc(message: Message, state: FSMContext):
         c.execute("INSERT INTO schedule (record_type, date, task_type, horse_name, created_by, created_by_name, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                   ('task', data["date"], data["task_type"], data["horse_name"], str(message.from_user.id), message.from_user.full_name, ts_msk()))
         conn.commit()
-    finally: conn.close()
+    finally: 
+        conn.close()
     await message.answer(f"✅ Поручение создано!\n📅 {data['date']}\n🐎 {data['horse_name']}: {data['task_type']}", parse_mode="HTML")
     await state.clear()
 
 # ============================================================
-# 7. КАРТОЧКА (ИСПРАВЛЕНА ПРОВЕРКА ID)
+# 7. КАРТОЧКА
 # ============================================================
 @router.callback_query(F.data.startswith("edit:"))
 async def show_card(callback: CallbackQuery):
@@ -339,13 +376,14 @@ async def show_card(callback: CallbackQuery):
         c = conn.cursor()
         c.execute("SELECT record_type, date, time_slot, task_type, duration, horse_name, comment, required_instructors, assigned_instructors FROM schedule WHERE id = ? AND deleted_at IS NULL", (row_id,))
         row = c.fetchone()
-    finally: conn.close()
+    finally: 
+        conn.close()
     
-    if not row: return await callback.answer("Не найдено.")
+    if not row: 
+        return await callback.answer("Не найдено.")
     
     r_type, date, time_slot, task, dur, horse, comm, req, assigned = row
     
-    # Парсим строку "ID:Имя, ID:Имя" в список кортежей
     assigned_list = []
     if assigned:
         for item in assigned.split(","):
@@ -354,7 +392,6 @@ async def show_card(callback: CallbackQuery):
                 assigned_list.append((int(uid), name))
     
     assigned_names = ", ".join([name for uid, name in assigned_list]) if assigned_list else "❌ Пока никто"
-    # Проверяем, есть ли ID текущего пользователя в списке записавшихся
     is_assigned = any(uid == user_id for uid, name in assigned_list)
     
     btn_rows = []
@@ -383,14 +420,13 @@ async def show_card(callback: CallbackQuery):
     await callback.answer()
 
 # ============================================================
-# 8. ВЗЯТЬ / ОТКАЗАТЬСЯ (ХРАНИМ ID И ИМЯ)
+# 8. ВЗЯТЬ / ОТКАЗАТЬСЯ
 # ============================================================
 @router.callback_query(F.data.startswith("take:"))
 async def take_slot(callback: CallbackQuery):
     row_id = int(callback.data.split(":")[1])
     user_id = callback.from_user.id
     
-    # Получаем имя (из регистрации или из профиля)
     conn = get_db()
     try:
         c = conn.cursor()
@@ -401,7 +437,6 @@ async def take_slot(callback: CallbackQuery):
         c.execute("SELECT required_instructors, assigned_instructors FROM schedule WHERE id = ?", (row_id,))
         req, assigned = c.fetchone()
         
-        # Парсим текущий список
         alist = []
         if assigned:
             for item in assigned.split(","):
@@ -409,20 +444,19 @@ async def take_slot(callback: CallbackQuery):
                     uid, uname = item.split(":", 1)
                     alist.append((int(uid), uname))
         
-        # Проверка на дубликат по ID
         if any(uid == user_id for uid, uname in alist):
             return await callback.answer("Вы уже записаны!", show_alert=True)
         if req > 0 and len(alist) >= req and len(alist) > 0: 
             return await callback.answer("Мест нет.", show_alert=True)
             
-        # Добавляем "ID:Имя"
         alist.append((user_id, name))
         new_assigned = ", ".join([f"{uid}:{uname}" for uid, uname in alist])
         
         conn.execute("UPDATE schedule SET assigned_instructors = ?, updated_at = ?, updated_by = ? WHERE id = ?", 
                      (new_assigned, ts_msk(), name, row_id))
         conn.commit()
-    finally: conn.close()
+    finally: 
+        conn.close()
     
     log_action(row_id, "assign", name, "Взял")
     await callback.answer("✅ Записано!")
@@ -446,14 +480,14 @@ async def untake_slot(callback: CallbackQuery):
                     uid, uname = item.split(":", 1)
                     alist.append((int(uid), uname))
         
-        # Удаляем запись по ID
         new_alist = [(uid, uname) for uid, uname in alist if uid != user_id]
-        
         new_assigned = ", ".join([f"{uid}:{uname}" for uid, uname in new_alist])
+        
         conn.execute("UPDATE schedule SET assigned_instructors = ?, updated_at = ? WHERE id = ?", 
                      (new_assigned, ts_msk(), row_id))
         conn.commit()
-    finally: conn.close()
+    finally: 
+        conn.close()
     
     log_action(row_id, "unassign", str(user_id), "Отказался")
     await callback.answer("❌ Отписались.")
@@ -470,8 +504,10 @@ async def start_edit(callback: CallbackQuery, state: FSMContext):
     _, row_id, field = callback.data.split(":")
     await state.update_data(row_id=int(row_id), field=field)
     await state.set_state(EditField.waiting_val)
-    if field == "date": await callback.message.answer("Выберите дату:", reply_markup=get_dates_keyboard())
-    elif field == "time_slot": await callback.message.answer("Выберите время:", reply_markup=get_times_keyboard())
+    if field == "date": 
+        await callback.message.answer("Выберите дату:", reply_markup=get_dates_keyboard())
+    elif field == "time_slot": 
+        await callback.message.answer("Выберите время:", reply_markup=get_times_keyboard())
     await callback.answer()
 
 @router.callback_query(F.data.startswith("date_pick:"), EditField.waiting_val)
@@ -482,7 +518,8 @@ async def apply_edit(callback: CallbackQuery, state: FSMContext):
     try:
         conn.execute(f"UPDATE schedule SET {data['field']} = ?, updated_at = ? WHERE id = ?", (callback.data.split(":")[1], ts_msk(), data['row_id']))
         conn.commit()
-    finally: conn.close()
+    finally: 
+        conn.close()
     await callback.message.edit_text("✅ Обновлено.")
     await state.clear()
     await callback.answer()
@@ -504,7 +541,8 @@ async def delconf(callback: CallbackQuery):
     try:
         conn.execute("UPDATE schedule SET deleted_at = ?, deleted_by = ? WHERE id = ?", (ts_msk(), callback.from_user.full_name, row_id))
         conn.commit()
-    finally: conn.close()
+    finally: 
+        conn.close()
     await callback.message.edit_text("🗑 Удалено.")
     await callback.answer()
 
@@ -519,8 +557,10 @@ async def cmd_edit(message: Message):
         c = conn.cursor()
         c.execute("SELECT id, record_type, date, time_slot, task_type FROM schedule WHERE date >= ? AND deleted_at IS NULL ORDER BY date, time_slot LIMIT 20", (today,))
         rows = c.fetchall()
-    finally: conn.close()
-    if not rows: return await message.answer("Записей нет.")
+    finally: 
+        conn.close()
+    if not rows: 
+        return await message.answer("Записей нет.")
     buttons = []
     for r in rows:
         _, r_type, date, time_slot, task = r
@@ -543,62 +583,76 @@ async def process_register(message: Message, state: FSMContext):
     try:
         conn.execute("INSERT OR REPLACE INTO employees (tg_id, name) VALUES (?, ?)", (message.from_user.id, name))
         conn.commit()
-    finally: conn.close()
+    finally: 
+        conn.close()
     await message.answer(f"✅ Имя «{name}» привязано.")
     await state.clear()
 
 @router.message(Command("log"))
 async def cmd_log(message: Message):
-    if not is_chief_admin(message.from_user.id): return await message.answer("⛔ Нет прав.")
+    if not is_chief_admin(message.from_user.id): 
+        return await message.answer("⛔ Нет прав.")
     conn = get_db()
     try:
         c = conn.cursor()
         c.execute("SELECT timestamp, action, schedule_id, actor FROM audit_log ORDER BY id DESC LIMIT 30")
         rows = c.fetchall()
-    finally: conn.close()
-    if not rows: return await message.answer("Журнал пуст.")
+    finally: 
+        conn.close()
+    if not rows: 
+        return await message.answer("Журнал пуст.")
     lines = ["📋 Последние действия:"]
-    for ts, action, sid, actor in rows: lines.append(f"{ts} | #{sid} | {actor} | {action}")
+    for ts, action, sid, actor in rows: 
+        lines.append(f"{ts} | #{sid} | {actor} | {action}")
     await message.answer("\n".join(lines))
 
 @router.message(Command("revoke"))
 async def cmd_revoke(message: Message):
-    if not is_chief_admin(message.from_user.id): return await message.answer("⛔ Нет прав.")
+    if not is_chief_admin(message.from_user.id): 
+        return await message.answer("⛔ Нет прав.")
     parts = message.text.split(maxsplit=1)
-    if len(parts) < 2 or not parts[1].strip().isdigit(): return await message.answer("Использование: /revoke <tg_id>")
+    if len(parts) < 2 or not parts[1].strip().isdigit(): 
+        return await message.answer("Использование: /revoke <tg_id>")
     target_id = int(parts[1].strip())
-    if target_id in CHIEF_ADMIN_IDS: return await message.answer("⛔ Нельзя отозвать у админа.")
+    if target_id in CHIEF_ADMIN_IDS: 
+        return await message.answer("⛔ Нельзя отозвать у админа.")
     conn = get_db()
     try:
         c = conn.cursor()
         c.execute("DELETE FROM auth_users WHERE tg_id = ?", (target_id,))
         deleted = c.rowcount
         conn.commit()
-    finally: conn.close()
+    finally: 
+        conn.close()
     await message.answer(f"✅ Доступ {target_id} отозван." if deleted else f"Пользователь не найден.")
 
 @router.message(Command("trash"))
 async def cmd_trash(message: Message):
-    if not is_chief_admin(message.from_user.id): return await message.answer("⛔ Нет прав.")
+    if not is_chief_admin(message.from_user.id): 
+        return await message.answer("⛔ Нет прав.")
     conn = get_db()
     try:
         c = conn.cursor()
         c.execute("SELECT id, record_type, date, task_type FROM schedule WHERE deleted_at IS NOT NULL LIMIT 20")
         rows = c.fetchall()
-    finally: conn.close()
-    if not rows: return await message.answer("Корзина пуста.")
+    finally: 
+        conn.close()
+    if not rows: 
+        return await message.answer("Корзина пуста.")
     buttons = [[InlineKeyboardButton(text=f"♻️ {r[2]} | {r[3]}"[:60], callback_data=f"restore:{r[0]}")] for r in rows]
     await message.answer("Корзина:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 @router.callback_query(F.data.startswith("restore:"))
 async def restore(callback: CallbackQuery):
-    if not is_chief_admin(callback.from_user.id): return await callback.answer("⛔ Нет прав.")
+    if not is_chief_admin(callback.from_user.id): 
+        return await callback.answer("⛔ Нет прав.")
     row_id = int(callback.data.split(":")[1])
     conn = get_db()
     try:
         conn.execute("UPDATE schedule SET deleted_at = NULL WHERE id = ?", (row_id,))
         conn.commit()
-    finally: conn.close()
+    finally: 
+        conn.close()
     await callback.message.edit_text("♻️ Восстановлено.")
     await callback.answer()
 
@@ -607,7 +661,7 @@ async def restore(callback: CallbackQuery):
 # ============================================================
 async def main():
     init_db()
-    print("Бот запущен.")
+    print("Бот запущен. Часовой пояс: МСК.")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
