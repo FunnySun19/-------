@@ -122,7 +122,7 @@ def get_instructors_count_keyboard():
     ])
 
 # ============================================================
-# 3. БОТ, MIDDLEWARE И ОБРАБОТЧИК ОШИБОК
+# 3. БОТ И ОБРАБОТЧИК ОШИБОК
 # ============================================================
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -131,15 +131,11 @@ dp.include_router(router)
 
 @dp.errors()
 async def errors_handler(event: ErrorEvent):
-    # Если произошла ошибка при нажатии кнопки, бот обязательно ответит
-    print("=== ОШИБКА ПРИ ОБРАБОТКЕ ===")
-    traceback.print_exception(type(event.exception), event.exception, event.exception.__traceback__)
+    # Если кнопка вызвала ошибку, бот мгновенно ответит "Ошибка", чтобы кнопка не висела
+    print(f"ERROR: {event.exception}")
     if isinstance(event.update.callback_query, CallbackQuery):
         with suppress(Exception):
-            await event.update.callback_query.answer("⚠️ Ошибка. Попробуйте еще раз.", show_alert=True)
-    elif isinstance(event.update.message, Message):
-        with suppress(Exception):
-            await event.update.message.answer("⚠️ Произошла ошибка на сервере.")
+            await event.update.callback_query.answer("⚠️ Ошибка бота!", show_alert=True)
     return True
 
 class AuthMiddleware(BaseMiddleware):
@@ -176,7 +172,7 @@ async def cmd_start(message: Message):
     await message.answer(text, parse_mode="HTML")
 
 # ============================================================
-# 5. ПРОСМОТР (БЕЗ КНОПОК, ЧИСТЫЙ ТЕКСТ)
+# 5. ПРОСМОТР (ТЕКСТ)
 # ============================================================
 @router.message(Command("schedule"))
 async def cmd_schedule(message: Message):
@@ -216,7 +212,7 @@ async def cmd_schedule(message: Message):
     for i in range(0, len(text), 4000): 
         await message.answer(text[i:i+4000], parse_mode="HTML")
     
-    await message.answer("Чтобы взять запись или посмотреть детали, отправьте /edit")
+    await message.answer("Чтобы взять запись, отправьте /edit")
 
 @router.message(Command("today"))
 async def cmd_today(message: Message):
