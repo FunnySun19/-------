@@ -131,14 +131,15 @@ dp.include_router(router)
 
 @dp.errors()
 async def errors_handler(event: ErrorEvent):
+    # Если произошла ошибка при нажатии кнопки, бот обязательно ответит
     print("=== ОШИБКА ПРИ ОБРАБОТКЕ ===")
     traceback.print_exception(type(event.exception), event.exception, event.exception.__traceback__)
     if isinstance(event.update.callback_query, CallbackQuery):
         with suppress(Exception):
-            await event.update.callback_query.answer("⚠️ Ошибка бота. Попробуйте /start", show_alert=True)
+            await event.update.callback_query.answer("⚠️ Ошибка. Попробуйте еще раз.", show_alert=True)
     elif isinstance(event.update.message, Message):
         with suppress(Exception):
-            await event.update.message.answer("⚠️ Ошибка бота. Попробуйте /start")
+            await event.update.message.answer("⚠️ Произошла ошибка на сервере.")
     return True
 
 class AuthMiddleware(BaseMiddleware):
@@ -169,13 +170,13 @@ async def handle_password(message: Message):
 async def cmd_start(message: Message):
     if not is_authorized(message.from_user.id): 
         return await message.answer("🔒 Введите пароль:")
-    text = "🐴 <b>Панель управления</b>\n\n/today — на сегодня\n/schedule — все записи (с кнопками)\n/add — создать запись\n/edit — редактировать/удалить\n/register — привязать имя"
+    text = "🐴 <b>Панель управления</b>\n\n/today — на сегодня\n/schedule — все записи\n/add — создать запись\n/edit — открыть карточку (взять/удалить)\n/register — привязать имя"
     if is_chief_admin(message.from_user.id): 
         text += "\n/log — журнал действий\n/revoke — отозвать доступ"
     await message.answer(text, parse_mode="HTML")
 
 # ============================================================
-# 5. ПРОСМОТР (С КНОПКАМИ ПОД КАЖДОЙ ЗАПИСЬЮ)
+# 5. ПРОСМОТР (БЕЗ КНОПОК, ЧИСТЫЙ ТЕКСТ)
 # ============================================================
 @router.message(Command("schedule"))
 async def cmd_schedule(message: Message):
@@ -195,30 +196,27 @@ async def cmd_schedule(message: Message):
     for r in rows: by_date.setdefault(r[2], []).append(r)
     
     lines = []
-    buttons = []
     day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
     
     for date, items in by_date.items():
         d_obj = datetime.strptime(date, "%Y-%m-%d")
         lines.append(f"📅 <b>{d_obj.strftime('%d.%m')} ({day_names[d_obj.weekday()]})</b>")
         for r in items:
-            row_id, r_type, _, time_slot, task, dur, horse, comm, req, assigned = r
+            _, r_type, _, time_slot, task, dur, horse, comm, req, assigned = r
             assigned_names = ", ".join([x.split(":")[1] for x in assigned.split(",") if ":" in x]) if assigned else "❌"
             
             if r_type == 'rental':
                 comm_str = f"\n     💬 {comm}" if comm else ""
                 lines.append(f"  🏇 {time_slot} | {task} ({dur}){comm_str}\n     👤 Нужно: {req} | Взяли: {assigned_names}")
-                # Добавляем кнопку для перехода в карточку
-                buttons.append([InlineKeyboardButton(text=f"Открыть: {time_slot} {task}", callback_data=f"edit:{row_id}")])
             else:
                 lines.append(f"  🐎 {time_slot} | {horse}: {task}\n     👤 Сделает: {assigned_names}")
-                buttons.append([InlineKeyboardButton(text=f"Открыть: {horse} ({task})", callback_data=f"edit:{row_id}")])
         lines.append("")
     
     text = "\n".join(lines)
-    # Отправляем текст с кнопками
     for i in range(0, len(text), 4000): 
-        await message.answer(text[i:i+4000], parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+        await message.answer(text[i:i+4000], parse_mode="HTML")
+    
+    await message.answer("Чтобы взять запись или посмотреть детали, отправьте /edit")
 
 @router.message(Command("today"))
 async def cmd_today(message: Message):
@@ -235,23 +233,21 @@ async def cmd_today(message: Message):
         return await message.answer(f"📅 <b>{now_msk().strftime('%d.%m.%Y')}</b>\nЗаписей нет.", parse_mode="HTML")
     
     lines = [f"📅 <b>Сегодня, {now_msk().strftime('%d.%m.%Y')}</b>\n"]
-    buttons = []
-    
     for r in rows:
-        row_id, r_type, time_slot, task, dur, horse, comm, req, assigned = r
+        _, r_type, time_slot, task, dur, horse, comm, req, assigned = r
         assigned_names = ", ".join([x.split(":")[1] for x in assigned.split(",") if ":" in x]) if assigned else "❌"
         
         if r_type == 'rental': 
             comm_str = f"\n💬 {comm}" if comm else ""
             lines.append(f"🏇 {time_slot} | {task} ({dur}){comm_str}\n👤 Нужно: {req} | Взяли: {assigned_names}\n")
-            buttons.append([InlineKeyboardButton(text=f"Открыть: {time_slot} {task}", callback_data=f"edit:{row_id}")])
         else: 
             lines.append(f"🐎 {time_slot} | {horse}: {task}\n👤 Сделает: {assigned_names}\n")
-            buttons.append([InlineKeyboardButton(text=f"Открыть: {horse} ({task})", callback_data=f"edit:{row_id}")])
             
     text = "\n".join(lines)
     for i in range(0, len(text), 4000): 
-        await message.answer(text[i:i+4000], parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+        await message.answer(text[i:i+4000], parse_mode="HTML")
+    
+    await message.answer("Чтобы взять запись, отправьте /edit")
 
 # ============================================================
 # 6. СОЗДАНИЕ (/add)
@@ -446,7 +442,6 @@ async def take_slot(callback: CallbackQuery):
         
         if any(uid == user_id for uid, uname in alist):
             return await callback.answer("Вы уже записаны!", show_alert=True)
-        # Разрешаем записаться, даже если нужно 0 (на случай ошибки), но если нужно > 0, проверяем лимит
         if req > 0 and len(alist) >= req: 
             return await callback.answer("Мест нет.", show_alert=True)
             
