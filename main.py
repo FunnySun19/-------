@@ -1,7 +1,6 @@
 import asyncio
 import sqlite3
 import os
-import traceback
 from datetime import datetime, timezone, timedelta
 from contextlib import suppress
 
@@ -40,7 +39,7 @@ def today_msk() -> str: return now_msk().strftime("%Y-%m-%d")
 def ts_msk() -> str: return now_msk().strftime("%Y-%m-%d %H:%M:%S")
 def is_chief_admin(user_id: int) -> bool: return user_id in CHIEF_ADMIN_IDS
 
-# Красивое отображение даты (11 ноября 2026, Пн)
+# Красивое отображение даты
 def format_date_ru(date_str: str) -> str:
     try:
         d = datetime.strptime(date_str, "%Y-%m-%d")
@@ -59,8 +58,7 @@ def log_action(schedule_id, action, actor, details=""):
         conn.execute("INSERT INTO audit_log (schedule_id, action, actor, details, timestamp) VALUES (?, ?, ?, ?, ?)",
                      (schedule_id, action, actor, details, ts_msk()))
         conn.commit()
-    finally: 
-        conn.close()
+    finally: conn.close()
 
 def is_authorized(user_id: int) -> bool:
     conn = get_db()
@@ -68,16 +66,14 @@ def is_authorized(user_id: int) -> bool:
         c = conn.cursor()
         c.execute("SELECT 1 FROM auth_users WHERE tg_id = ?", (user_id,))
         return c.fetchone() is not None
-    finally: 
-        conn.close()
+    finally: conn.close()
 
 def authorize_user(user_id: int, name: str):
     conn = get_db()
     try:
         conn.execute("INSERT OR REPLACE INTO auth_users (tg_id, name, authorized_at) VALUES (?, ?, ?)", (user_id, name, ts_msk()))
         conn.commit()
-    finally: 
-        conn.close()
+    finally: conn.close()
 
 # ============================================================
 # 2. КЛАВИАТУРЫ
@@ -88,8 +84,6 @@ def get_main_menu_keyboard(user_id: int):
         [KeyboardButton(text="➕ Создать запись"), KeyboardButton(text="✏️ Редактировать")],
         [KeyboardButton(text="🙋‍♂️ Мои записи"), KeyboardButton(text="👤 Мой профиль")]
     ]
-    if is_chief_admin(user_id):
-        keyboard.append([KeyboardButton(text="📊 Статистика")])
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True, input_field_placeholder="Выберите действие...")
 
 def get_dates_keyboard():
@@ -146,7 +140,7 @@ def get_instructors_count_keyboard():
     ])
 
 # ============================================================
-# 3. БОТ И MIDDLEWARE
+# 3. БОТ, MIDDLEWARE
 # ============================================================
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -210,14 +204,8 @@ async def menu_my(message: Message): await cmd_my_records(message)
 @router.message(F.text == "👤 Мой профиль")
 async def menu_profile(message: Message): await message.answer("Чтобы привязать имя, отправьте /register")
 
-@router.message(F.text == "📊 Статистика")
-async def menu_stats(message: Message):
-    if not is_chief_admin(message.from_user.id):
-        return await message.answer("⛔ Нет прав.")
-    await cmd_stats(message)
-
 # ============================================================
-# 5. ПРОСМОТР
+# 5. ПРОСМОТР (КРАСИВАЯ ДАТА)
 # ============================================================
 @router.message(Command("schedule"))
 async def cmd_schedule(message: Message):
@@ -335,7 +323,7 @@ async def process_date(callback: CallbackQuery, state: FSMContext):
         with suppress(TelegramBadRequest): await callback.message.edit_text("Выберите время:", reply_markup=get_times_keyboard())
     else:
         await state.set_state(AddSchedule.waiting_task_desc)
-        with suppress(TelegramBadRequest): await callback.message.edit_text("Введите задачу/комментарий (например: почистить денник):")
+        with suppress(TelegramBadRequest): await callback.message.edit_text("Введите задачу/комментарий:")
 
 @router.callback_query(F.data.startswith("time_pick:"), AddSchedule.waiting_time)
 async def process_time(callback: CallbackQuery, state: FSMContext):
