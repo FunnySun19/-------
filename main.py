@@ -10,17 +10,17 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
-    Message, CallbackQuery, ErrorEvent,
+    Message, CallbackQuery, ErrorEvent, Update,
     InlineKeyboardMarkup, InlineKeyboardButton,
 )
 from aiogram.exceptions import TelegramBadRequest
+from aiohttp import web
 
 from db import init_db, DB_PATH
 
 # ============================================================
 # 1. КОНФИГУРАЦИЯ
 # ============================================================
-# Токен берется из переменных Bothost. В коде его быть не должно!
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("Переменная окружения BOT_TOKEN не задана!")
@@ -123,7 +123,7 @@ def get_instructors_count_keyboard():
     ])
 
 # ============================================================
-# 3. БОТ И ОБРАБОТЧИК ОШИБОК
+# 3. БОТ, MIDDLEWARE И ОБРАБОТЧИК ОШИБОК
 # ============================================================
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -132,7 +132,6 @@ dp.include_router(router)
 
 @dp.errors()
 async def errors_handler(event: ErrorEvent):
-    # Если кнопка вызвала ошибку, бот мгновенно ответит, чтобы кнопка не висела
     print(f"ERROR: {event.exception}")
     if isinstance(event.update.callback_query, CallbackQuery):
         with suppress(Exception):
@@ -650,12 +649,40 @@ async def restore(callback: CallbackQuery):
     await callback.answer()
 
 # ============================================================
-# ТОЧКА ВХОДА
+# 11. ЗАПУСК ЧЕРЕЗ WEBHOOK (ДЛЯ BOTHOST)
 # ============================================================
+async def handle_webhook(request: web.Request):
+    update_data = await request.json()
+    update = Update(**update_data)
+    await dp.feed_update(bot, update)
+    return web.Response(text="OK")
+
 async def main():
     init_db()
-    print("Бот запущен. Часовой пояс: МСК.")
-    await dp.start_polling(bot)
+    
+    # Ваш домен от Bothost (без https://)
+    WEBHOOK_HOST = "bot-1793300548-1325-funnysun.bothost.tech"
+    WEBHOOK_PATH = "/webhook"
+    WEBHOOK_URL = f"https://{WEBHOOK_HOST}{WEBHOOK_PATH}"
+    
+    # Настраиваем вебхук в Telegram
+    await bot.set_webhook(url=WEBHOOK_URL)
+    print(f"Бот запущен на вебхуке: {WEBHOOK_URL}")
+    
+    # Настраиваем веб-сервер
+    app = web.Application()
+    app.router.add_post(WEBHOOK_PATH, handle_webhook)
+    
+    # Bothost передает порт через переменную PORT
+    port = int(os.environ.get("PORT", 3000))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    
+    # Держим сервер включенным
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == "__main__":
     asyncio.run(main())
