@@ -10,11 +10,10 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
-    Message, CallbackQuery, ErrorEvent, Update,
+    Message, CallbackQuery, ErrorEvent,
     InlineKeyboardMarkup, InlineKeyboardButton,
 )
 from aiogram.exceptions import TelegramBadRequest
-from aiohttp import web
 
 from db import init_db, DB_PATH
 
@@ -357,7 +356,7 @@ async def process_task_desc(message: Message, state: FSMContext):
     await state.clear()
 
 # ============================================================
-# 7. КАРТОЧКА (ДЛЯ /edit) — УБРАНА РАЗМЕТКА HTML
+# 7. КАРТОЧКА (ДЛЯ /edit) — БЕЗ HTML РАЗМЕТКИ
 # ============================================================
 @router.callback_query(F.data.startswith("edit:"))
 async def show_card(callback: CallbackQuery):
@@ -389,7 +388,6 @@ async def show_card(callback: CallbackQuery):
     btn_rows = []
     if r_type == 'rental':
         comm_str = f"\n💬 {comm}" if comm else ""
-        # Текст без HTML тегов
         text = f"📝 Прокат #{row_id}\n\n📅 {date} 🕒 {time_slot}\n🏇 {task} ({dur}){comm_str}\n👤 Нужно: {req}\n✅ Взяли: {assigned_names}"
         if req == 0 or len(assigned_list) < req: 
             btn_rows.append([InlineKeyboardButton(text="🙋‍♂️ Я возьму", callback_data=f"take:{row_id}")])
@@ -409,7 +407,8 @@ async def show_card(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=btn_rows)
     with suppress(TelegramBadRequest): 
-        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode=None) # parse_mode=None
+        # parse_mode=None отключает HTML, чтобы ничего не ломалось
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode=None) 
     await callback.answer()
 
 # ============================================================
@@ -650,36 +649,14 @@ async def restore(callback: CallbackQuery):
     await callback.answer()
 
 # ============================================================
-# 11. ЗАПУСК ЧЕРЕЗ WEBHOOK
+# 11. ЗАПУСК ДЛЯ AMVERA (LONG POLLING)
 # ============================================================
-async def handle_webhook(request: web.Request):
-    update_data = await request.json()
-    update = Update(**update_data)
-    await dp.feed_update(bot, update)
-    return web.Response(text="OK")
-
 async def main():
     init_db()
-    
-    # Ваш домен от Bothost
-    WEBHOOK_HOST = "bot-1793300548-1325-funnysun.bothost.tech"
-    WEBHOOK_PATH = "/webhook"
-    WEBHOOK_URL = f"https://{WEBHOOK_HOST}{WEBHOOK_PATH}"
-    
-    await bot.set_webhook(url=WEBHOOK_URL)
-    print(f"Бот запущен на вебхуке: {WEBHOOK_URL}")
-    
-    app = web.Application()
-    app.router.add_post(WEBHOOK_PATH, handle_webhook)
-    
-    port = int(os.environ.get("PORT", 3000))
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    
-    while True:
-        await asyncio.sleep(3600)
+    print("Бот запущен на Long Polling (Amvera).")
+    # Сбрасываем вебхук, чтобы Amvera могла работать через polling
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())

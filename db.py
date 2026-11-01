@@ -1,9 +1,10 @@
 import sqlite3
 import os
 
-# Путь к базе данных в Bothost (постоянное хранилище)
-if os.path.exists("/app/data"):
-    DB_PATH = "/app/data/stable.db"
+# В Amvera постоянное хранилище находится в /data
+# Локально (для тестов) база будет создаваться рядом с файлом
+if os.path.exists("/data"):
+    DB_PATH = "/data/stable.db"
 else:
     DB_PATH = "stable.db"
 
@@ -12,7 +13,7 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
-    # Таблица расписания
+    # Таблица расписания (прокаты и поручения)
     c.execute("""
         CREATE TABLE IF NOT EXISTS schedule (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
