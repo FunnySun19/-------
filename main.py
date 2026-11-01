@@ -204,7 +204,7 @@ async def menu_my(message: Message): await cmd_my_records(message)
 async def menu_profile(message: Message): await message.answer("Чтобы привязать имя, отправьте /register")
 
 # ============================================================
-# 5. ПРОСМОТР (С КНОПКАМИ ПЕРЕХОДА)
+# 5. ПРОСМОТР (С КНОПКАМИ ПЕРЕХОДА В ОДНОМ СООБЩЕНИИ)
 # ============================================================
 @router.message(Command("schedule"))
 async def cmd_schedule(message: Message):
@@ -216,7 +216,8 @@ async def cmd_schedule(message: Message):
         rows = c.fetchall()
     finally: conn.close()
 
-    if not rows: return await message.answer("Расписание пусто.")
+    if not rows: 
+        return await message.answer("Расписание пусто.")
     
     by_date = {}
     for r in rows: by_date.setdefault(r[2], []).append(r)
@@ -241,7 +242,12 @@ async def cmd_schedule(message: Message):
         lines.append("")
     
     text = "\n".join(lines)
-    await message.answer(text[:4000], parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    
+    # Отправляем ОДНО сообщение с текстом и кнопками
+    if len(text) > 4000:
+        text = text[:3990] + "\n..."
+        
+    await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 @router.message(Command("today"))
 async def cmd_today(message: Message):
@@ -253,7 +259,8 @@ async def cmd_today(message: Message):
         rows = c.fetchall()
     finally: conn.close()
     
-    if not rows: return await message.answer(f"📅 <b>{format_date_ru(today)}</b>\nЗаписей нет.", parse_mode="HTML")
+    if not rows: 
+        return await message.answer(f"📅 <b>{format_date_ru(today)}</b>\nЗаписей нет.", parse_mode="HTML")
     
     lines = [f"📅 <b>Сегодня, {format_date_ru(today)}</b>\n"]
     buttons = []
@@ -271,7 +278,10 @@ async def cmd_today(message: Message):
             buttons.append([InlineKeyboardButton(text=f"Открыть: {task}"[:60], callback_data=f"edit:{row_id}")])
             
     text = "\n".join(lines)
-    await message.answer(text[:4000], parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    if len(text) > 4000:
+        text = text[:3990] + "\n..."
+        
+    await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 @router.message(Command("my"))
 async def cmd_my_records(message: Message):
@@ -284,7 +294,8 @@ async def cmd_my_records(message: Message):
         rows = c.fetchall()
     finally: conn.close()
     
-    if not rows: return await message.answer("У вас пока нет назначенных записей.")
+    if not rows: 
+        return await message.answer("У вас пока нет назначенных записей.")
     
     lines = ["🙋‍♂️ <b>Ваши записи:</b>\n"]
     for r in rows:
@@ -609,13 +620,17 @@ async def cmd_edit(message: Message):
         c.execute("SELECT id, record_type, date, time_slot, task_type FROM schedule WHERE date >= ? AND deleted_at IS NULL ORDER BY date, time_slot LIMIT 20", (today,))
         rows = c.fetchall()
     finally: conn.close()
-    if not rows: return await message.answer("Записей нет.")
+    
+    if not rows: 
+        return await message.answer("Записей нет.")
+        
     buttons = []
     for r in rows:
         _, r_type, date, time_slot, task = r
         icon = "🏇" if r_type == 'rental' else "📝"
         time_str = f" {time_slot}" if time_slot else ""
         buttons.append([InlineKeyboardButton(text=f"{icon} {format_date_ru(date)}{time_str} | {task}"[:60], callback_data=f"edit:{r[0]}")])
+    
     await message.answer("Выберите запись:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 class Register(StatesGroup):
