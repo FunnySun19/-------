@@ -88,6 +88,7 @@ def get_dates_keyboard():
 def get_times_keyboard():
     keyboard, row = [], []
     for hour in range(8, 21):
+        # Сохраняем время как 08:00
         row.append(InlineKeyboardButton(text=f"{hour:02d}:00", callback_data=f"time_pick:{hour:02d}:00"))
         if len(row) == 4:
             keyboard.append(row)
@@ -289,7 +290,9 @@ async def process_date(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("time_pick:"), AddSchedule.waiting_time)
 async def process_time(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    await state.update_data(time_slot=callback.data.split(":")[1])
+    # Исправлен баг с обрезкой времени
+    time_val = callback.data.split(":", 1)[1]
+    await state.update_data(time_slot=time_val)
     await state.set_state(AddSchedule.waiting_rental_type)
     with suppress(TelegramBadRequest):
         await callback.message.edit_text("Выберите тип проката:", reply_markup=get_rental_type_keyboard())
@@ -364,10 +367,42 @@ async def process_task_desc(message: Message, state: FSMContext):
     await state.clear()
 
 # ============================================================
-# 7. КАРТОЧКА (ДЛЯ /edit) — БЕЗ HTML РАЗМЕТКИ
+# ОБРАБОТЧИКИ КНОПОК "НАЗАД"
+# ============================================================
+@router.callback_query(F.data == "back_to_dates", AddSchedule.waiting_time)
+async def back_to_dates(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.set_state(AddSchedule.waiting_date)
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_text("Выберите дату:", reply_markup=get_dates_keyboard())
+
+@router.callback_query(F.data == "back_to_main_type", AddSchedule.waiting_rental_type)
+async def back_to_main_type(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.set_state(AddSchedule.waiting_main_type)
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_text("Что создаем?", reply_markup=get_main_type_keyboard())
+
+@router.callback_query(F.data == "back_to_types", AddSchedule.waiting_duration)
+async def back_to_types(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.set_state(AddSchedule.waiting_rental_type)
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_text("Выберите тип проката:", reply_markup=get_rental_type_keyboard())
+
+@router.callback_query(F.data == "back_to_durs", AddSchedule.waiting_instr_count)
+async def back_to_durs(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.set_state(AddSchedule.waiting_duration)
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_text("Выберите длительность:", reply_markup=get_durations_keyboard())
+
+# ============================================================
+# 7. КАРТОЧКА (ДЛЯ /edit)
 # ============================================================
 @router.callback_query(F.data.startswith("edit:"))
 async def show_card(callback: CallbackQuery):
+    await callback.answer()
     row_id = int(callback.data.split(":")[1])
     user_id = callback.from_user.id
     conn = get_db()
@@ -379,7 +414,7 @@ async def show_card(callback: CallbackQuery):
         conn.close()
     
     if not row: 
-        return await callback.answer("Не найдено.")
+        return
     
     r_type, date, time_slot, task, dur, horse, comm, req, assigned = row
     
@@ -415,15 +450,14 @@ async def show_card(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=btn_rows)
     with suppress(TelegramBadRequest): 
-        # parse_mode=None отключает HTML, чтобы ничего не ломалось
         await callback.message.edit_text(text, reply_markup=keyboard, parse_mode=None) 
-    await callback.answer()
 
 # ============================================================
 # 8. ВЗЯТЬ / ОТКАЗАТЬСЯ
 # ============================================================
 @router.callback_query(F.data.startswith("take:"))
 async def take_slot(callback: CallbackQuery):
+    await callback.answer()
     row_id = int(callback.data.split(":")[1])
     user_id = callback.from_user.id
     
@@ -445,9 +479,9 @@ async def take_slot(callback: CallbackQuery):
                     alist.append((int(uid), uname))
         
         if any(uid == user_id for uid, uname in alist):
-            return await callback.answer("Вы уже записаны!", show_alert=True)
+            return
         if req > 0 and len(alist) >= req: 
-            return await callback.answer("Мест нет.", show_alert=True)
+            return
             
         alist.append((user_id, name))
         new_assigned = ", ".join([f"{uid}:{uname}" for uid, uname in alist])
@@ -459,11 +493,11 @@ async def take_slot(callback: CallbackQuery):
         conn.close()
     
     log_action(row_id, "assign", name, "Взял")
-    await callback.answer("✅ Записано!")
     await show_card(callback)
 
 @router.callback_query(F.data.startswith("untake:"))
 async def untake_slot(callback: CallbackQuery):
+    await callback.answer()
     row_id = int(callback.data.split(":")[1])
     user_id = callback.from_user.id
     
@@ -490,7 +524,6 @@ async def untake_slot(callback: CallbackQuery):
         conn.close()
     
     log_action(row_id, "unassign", str(user_id), "Отказался")
-    await callback.answer("❌ Отписались.")
     await show_card(callback)
 
 # ============================================================
@@ -515,9 +548,11 @@ async def start_edit(callback: CallbackQuery, state: FSMContext):
 async def apply_edit(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     data = await state.get_data()
+    # Исправлен баг с обрезкой времени
+    new_val = callback.data.split(":", 1)[1]
     conn = get_db()
     try:
-        conn.execute(f"UPDATE schedule SET {data['field']} = ?, updated_at = ? WHERE id = ?", (callback.data.split(":")[1], ts_msk(), data['row_id']))
+        conn.execute(f"UPDATE schedule SET {data['field']} = ?, updated_at = ? WHERE id = ?", (new_val, ts_msk(), data['row_id']))
         conn.commit()
     finally: 
         conn.close()
@@ -648,49 +683,3 @@ async def cmd_trash(message: Message):
 @router.callback_query(F.data.startswith("restore:"))
 async def restore(callback: CallbackQuery):
     await callback.answer()
-    if not is_chief_admin(callback.from_user.id): 
-        return
-    row_id = int(callback.data.split(":")[1])
-    conn = get_db()
-    try:
-        conn.execute("UPDATE schedule SET deleted_at = NULL WHERE id = ?", (row_id,))
-        conn.commit()
-    finally: 
-        conn.close()
-    with suppress(TelegramBadRequest):
-        await callback.message.edit_text("♻️ Восстановлено.")
-
-# ============================================================
-# 11. ЗАПУСК ЧЕРЕЗ WEBHOOK ДЛЯ BOTHOST
-# ============================================================
-async def handle_webhook(request: web.Request):
-    update_data = await request.json()
-    update = Update(**update_data)
-    await dp.feed_update(bot, update)
-    return web.Response(text="OK")
-
-async def main():
-    init_db()
-    
-    # ВАШ НОВЫЙ ДОМЕН ОТ BOTHOST
-    WEBHOOK_HOST = "bot-1793550751-7255-funnysun.bothost.tech"
-    WEBHOOK_PATH = "/webhook"
-    WEBHOOK_URL = f"https://{WEBHOOK_HOST}{WEBHOOK_PATH}"
-    
-    await bot.set_webhook(url=WEBHOOK_URL)
-    print(f"Бот запущен на вебхуке: {WEBHOOK_URL}")
-    
-    app = web.Application()
-    app.router.add_post(WEBHOOK_PATH, handle_webhook)
-    
-    port = int(os.environ.get("PORT", 3000))
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    
-    while True:
-        await asyncio.sleep(3600)
-
-if __name__ == "__main__":
-    asyncio.run(main())
